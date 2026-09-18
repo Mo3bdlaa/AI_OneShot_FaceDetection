@@ -1,0 +1,11 @@
+# Core runtime
+numpy>=1.24
+opencv-python>=4.8
+insightface>=0.7.3
+onnxruntime>=1.16
+
+# Optional, enables real person/body boxes instead of the geometric estimate:
+#   pip install ultralytics
+#
+# Optional, for NVIDIA GPUs - replace onnxruntime with:
+#   pip install onnxruntime-gpu

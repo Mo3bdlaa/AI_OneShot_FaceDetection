@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.env
+
+# Models / caches
+models/
+*.onnx
+*.pt
+.insightface/
+
+# Data
+input_faces/**
+!input_faces/.gitkeep
+!input_faces/README.md
+outputs/
+*.mp4
+*.avi
+*.mkv
+*.mov
+
+# Gallery cache
+*.gallery.npz
+gallery_cache/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/

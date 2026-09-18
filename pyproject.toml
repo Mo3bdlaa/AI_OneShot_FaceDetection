@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oneshot-fd"
+version = "1.0.0"
+description = "One-shot face recognition with live face and body highlighting for video, streams and cameras"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "Mohammed Shaker", email = "mo3bdlaa@gmail.com" }]
+keywords = ["face-recognition", "one-shot", "arcface", "insightface", "computer-vision", "video"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+    "License :: OSI Approved :: MIT License",
+]
+dependencies = [
+    "numpy>=1.24",
+    "opencv-python>=4.8",
+    "insightface>=0.7.3",
+    "onnxruntime>=1.16",
+]
+
+[project.optional-dependencies]
+body = ["ultralytics>=8.0"]
+gpu = ["onnxruntime-gpu>=1.16"]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+oneshot-fd = "oneshot_fd.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Mo3bdlaa/AI_OneShot_FaceDetection"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
