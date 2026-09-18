@@ -7,7 +7,7 @@ import pytest
 from oneshot_fd import selfcheck
 from oneshot_fd.config import AppConfig, RecognitionConfig
 from oneshot_fd.gallery import Gallery, Person
-from oneshot_fd.selfcheck import DEGRADATIONS, Report, Trial
+from oneshot_fd.selfcheck import DEGRADATIONS, HoldOut, Report, Trial
 from oneshot_fd.utils import l2_normalize
 
 
@@ -68,8 +68,17 @@ def test_the_advice_leads_with_the_worst_problem():
                      trials=[trial(matched="Unknown", runner_up="Omar")] * 4)
     assert "Unknown" in missing.advice()
 
-    fine = Report(threshold=0.4, people=2, trials=[trial()] * 10)
-    assert "separates cleanly" in fine.advice()
+    # With one photo each, a clean run proves the pipeline works and no more.
+    one_each = Report(threshold=0.4, people=2, trials=[trial()] * 10,
+                      single_photo=["Sara", "Omar"])
+    assert "only shows the pipeline works" in one_each.advice()
+    assert "separates cleanly" not in one_each.advice()
+
+    # With a held-out photo recognised, the claim can be stronger.
+    proven = Report(threshold=0.4, people=2, trials=[trial()] * 10,
+                    holdouts=[HoldOut("Sara", "b.jpg", "Sara", 0.71, "Omar", 0.05)])
+    assert "separates cleanly" in proven.advice()
+    assert "never seen" in proven.advice()
 
 
 def test_a_near_tie_is_named_in_the_advice():
@@ -246,3 +255,93 @@ def test_the_endpoint_refuses_while_a_session_is_running():
             response = client.post("/api/self-check")
         assert response.status_code == 409
         assert "Stop the running session" in response.json()["detail"]
+
+
+# --------------------------------------------- the held-out test, the real one
+
+def test_a_holdout_knows_whether_it_was_right():
+    assert HoldOut("Sara", "b.jpg", "Sara", 0.7).correct
+    assert not HoldOut("Sara", "b.jpg", "Unknown", 0.2).correct
+    assert not HoldOut("Sara", "b.jpg", "Omar", 0.5).correct
+    assert not HoldOut("Sara", "b.jpg", "", 0.0, detected=False).correct
+
+
+def test_the_report_says_plainly_when_the_real_test_could_not_run():
+    report = Report(threshold=0.4, people=2, trials=[trial()] * 4,
+                    single_photo=["Sara", "Omar"])
+    # Wrapped across lines, so compare without caring where the breaks fall.
+    text = " ".join(report.format_holdouts().split())
+    assert "not possible" in text
+    assert "Sara" in text and "Omar" in text
+    assert "easier question" in text
+
+
+def test_the_report_gives_the_two_ranges_that_matter():
+    report = Report(threshold=0.4, people=3, trials=[trial()] * 4, holdouts=[
+        HoldOut("Sara", "b.jpg", "Sara", 0.72, "Omar", 0.07),
+        HoldOut("Omar", "b.jpg", "Omar", 0.65, "Sara", 0.02),
+    ])
+    text = report.format_holdouts()
+    assert "2/2 recognised" in text
+    assert "0.650 to 0.720" in text, "the same-person range"
+    assert "0.020 to 0.070" in text, "the stranger range"
+
+
+def test_a_missed_holdout_is_called_out():
+    report = Report(threshold=0.4, people=2, holdouts=[
+        HoldOut("Sara", "day2.jpg", "Unknown", 0.31, "Omar", 0.04),
+    ])
+    assert "MISSED: Sara's day2.jpg came back Unknown" in report.format_holdouts()
+    assert "Sara" in report.advice()
+    assert report.holdout_recall == 0.0
+
+
+def test_a_holdout_failure_outranks_a_clean_degraded_run():
+    """Degraded copies passing means little if a real photo failed."""
+    report = Report(threshold=0.4, people=2, trials=[trial()] * 20, holdouts=[
+        HoldOut("Sara", "day2.jpg", "Unknown", 0.30),
+    ])
+    assert report.recall == 1.0
+    assert "failure that matters" in report.advice()
+
+
+def test_holding_out_leaves_the_person_recognisable_by_their_other_photos(tmp_path):
+    """The mechanics: the gallery used for the test must exclude that photo."""
+    import cv2
+
+    from oneshot_fd.selfcheck import hold_out
+
+    photos = []
+    for name in ("a.jpg", "b.jpg"):
+        path = tmp_path / name
+        cv2.imwrite(str(path), np.full((100, 100, 3), 120, np.uint8))
+        photos.append(str(path))
+
+    gallery = Gallery()
+    vectors = l2_normalize(np.array([[1, 0, 0, 0], [0.9, 0.436, 0, 0]], np.float32), axis=1)
+    gallery._set_people([
+        Person("Sara", vectors, photos),
+        Person("Omar", l2_normalize(np.array([[0, 0, 1, 0]], np.float32), axis=1), ["o.jpg"]),
+    ])
+
+    engine = ScriptedEngine([np.array([1, 0, 0, 0], np.float32)])
+    results = hold_out(gallery, engine, AppConfig(recognition=RecognitionConfig(threshold=0.4)))
+
+    assert len(results) == 2, "one per photo of the person who has two"
+    assert all(r.person == "Sara" for r in results)
+    # Omar has one photo, so he is never held out.
+    assert not any(r.person == "Omar" for r in results)
+
+
+def test_someone_with_one_photo_is_listed_not_held_out(tmp_path):
+    import cv2
+
+    photo = tmp_path / "Solo.jpg"
+    cv2.imwrite(str(photo), np.full((100, 100, 3), 120, np.uint8))
+    gallery = gallery_of(Solo=[1, 0, 0, 0])
+    gallery.people[0].sources = [str(photo)]
+
+    report = selfcheck.run(AppConfig(), ScriptedEngine([np.array([1, 0, 0, 0], np.float32)]),
+                           gallery)
+    assert report.holdouts == []
+    assert report.single_photo == ["Solo"]

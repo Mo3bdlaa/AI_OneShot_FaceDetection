@@ -30,7 +30,7 @@ import numpy as np
 
 from .config import AppConfig
 from .faces import FaceEngine
-from .gallery import Gallery
+from .gallery import Gallery, Person
 from .utils import LOGGER, imread_unicode
 
 
@@ -108,12 +108,45 @@ recognition_margin_hint = 0.15
 
 
 @dataclass
+class HoldOut:
+    """One photo identified by a gallery that did not contain it.
+
+    This is the honest question. Degrading an enrolled photo asks whether the
+    pipeline is intact; holding a photo out and asking who it is asks whether
+    recognition actually generalises to a different day, a different camera, a
+    different haircut. The two give very different numbers - about 0.96 for a
+    degraded copy of the same photo, and 0.64-0.84 for a genuinely different
+    one - so they are reported apart.
+    """
+
+    person: str
+    photo: str
+    matched: str
+    score: float
+    runner_up: str = ""
+    runner_up_score: float = 0.0
+    detected: bool = True
+
+    @property
+    def correct(self) -> bool:
+        return self.detected and self.matched == self.person
+
+    @property
+    def margin(self) -> float:
+        return self.score - self.runner_up_score
+
+
+@dataclass
 class Report:
     """What the whole check found."""
 
     threshold: float
     trials: List[Trial] = field(default_factory=list)
     people: int = 0
+    #: Results of the stronger test, where it could be run at all.
+    holdouts: List[HoldOut] = field(default_factory=list)
+    #: People who only have one photo, so could not be held out.
+    single_photo: List[str] = field(default_factory=list)
 
     @property
     def attempted(self) -> int:
@@ -172,7 +205,7 @@ class Report:
             correct = sum(t.correct for t in trials)
             lines.append(f"  {kind:<22} {correct}/{len(trials)}")
 
-        lines += ["", f"Overall: {self.recall:.0%} recognised"]
+        lines += ["", f"Overall: {self.recall:.0%} of degraded copies recognised"]
         if self.undetected:
             lines.append(f"  {len(self.undetected)} copies had no detectable face at all "
                          "(usually the quarter-size ones - that is the resolution floor)")
@@ -198,11 +231,66 @@ class Report:
             if len(self.missed) > 8:
                 lines.append(f"      ... and {len(self.missed) - 8} more")
 
+        lines += ["", self.format_holdouts()]
         lines += ["", self.advice()]
         return "\n".join(lines)
 
+    # ------------------------------------------------------ the stronger test
+    @property
+    def holdout_recall(self) -> float:
+        if not self.holdouts:
+            return 0.0
+        return sum(h.correct for h in self.holdouts) / len(self.holdouts)
+
+    def format_holdouts(self) -> str:
+        """The part that answers whether recognition generalises."""
+        if not self.holdouts:
+            missing = ", ".join(self.single_photo[:6])
+            more = f" and {len(self.single_photo) - 6} others" if len(self.single_photo) > 6 \
+                else ""
+            return (
+                "Held-out test: not possible - everyone has only one photo"
+                + (f" ({missing}{more})" if missing else "") + ".\n"
+                "  The check above degrades the photo you enrolled, which is an easier\n"
+                "  question than a different photo taken another day. Add a second photo\n"
+                "  of somebody and this becomes a real measurement."
+            )
+
+        correct = sum(h.correct for h in self.holdouts)
+        lines = [
+            f"Held-out test: {correct}/{len(self.holdouts)} recognised from a gallery "
+            "that did not contain that photo",
+        ]
+        scores = [h.score for h in self.holdouts if h.correct]
+        if scores:
+            lines.append(f"  same person, a different photo: "
+                         f"{min(scores):.3f} to {max(scores):.3f}")
+        strangers = [h.runner_up_score for h in self.holdouts if h.runner_up]
+        if strangers:
+            lines.append(f"  nearest other person:            "
+                         f"{min(strangers):.3f} to {max(strangers):.3f}")
+        for holdout in self.holdouts:
+            if holdout.correct:
+                continue
+            what = "no face found" if not holdout.detected else f"came back {holdout.matched}"
+            lines.append(f"  MISSED: {holdout.person}'s {holdout.photo} {what} "
+                         f"({holdout.score:.3f})")
+        if self.single_photo:
+            lines.append(f"  ({len(self.single_photo)} people have only one photo and "
+                         "could not be tested this way)")
+        return "\n".join(lines)
+
     def advice(self) -> str:
-        """The one sentence worth acting on."""
+        """The one sentence worth acting on.
+
+        The held-out result outranks the degraded one wherever it exists,
+        because it is the question that matters.
+        """
+        if self.holdouts and self.holdout_recall < 1.0:
+            missed = [h.person for h in self.holdouts if not h.correct]
+            return (f"A different photo of {', '.join(sorted(set(missed))[:3])} was not "
+                    "recognised. That is the failure that matters - lower --threshold, or "
+                    "enrol them from a photo closer to how they look on camera.")
         if self.confused:
             names = sorted({t.person for t in self.confused})
             return (f"Somebody was named as the wrong person ({', '.join(names[:3])}). "
@@ -215,9 +303,15 @@ class Report:
                     if ties else "")
             return ("A lot of copies were left Unknown rather than named." + hint +
                     " Lower --threshold, or give those people clearer photos.")
+        if self.recall >= 0.9 and self.holdouts:
+            worst = min((h.score for h in self.holdouts), default=0.0)
+            return (f"This gallery separates cleanly, including on photos it had never "
+                    f"seen (worst {worst:.2f}, threshold {self.threshold:.2f}). More "
+                    "people makes the job harder, so re-run after adding more.")
         if self.recall >= 0.9:
-            return ("This gallery separates cleanly. Note that more people makes the "
-                    "job harder, so re-run this after adding more.")
+            return ("Nothing here is broken, but every person has one photo, so this only "
+                    "shows the pipeline works - not that these people are far apart. Add a "
+                    "second photo of somebody, taken another day, for a real measurement.")
         if self.recall >= 0.7:
             return ("Workable, but the weak entries above would benefit from another "
                     "photo each - a different angle or day helps most.")
@@ -225,10 +319,71 @@ class Report:
                 "reference photos, or lower --threshold and watch for wrong matches.")
 
 
+def _photos_of(person: Person) -> List[str]:
+    """The real files behind a person, without the mirrored duplicates."""
+    return sorted({source.split(" (")[0] for source in person.sources})
+
+
+def hold_out(gallery: Gallery, engine: FaceEngine, config: AppConfig) -> List[HoldOut]:
+    """Identify each photo using a gallery built without it.
+
+    For anyone with two or more photos, one is removed and the rest are used to
+    recognise it. That is the real question - does this generalise to a
+    different photo - and it needs nothing but what the user already has.
+
+    A person with a single photo cannot be tested this way, because removing it
+    leaves nothing to recognise them by. Those are reported, not skipped
+    silently: knowing the test could not run matters as much as its result.
+    """
+    recognition = config.recognition
+    results: List[HoldOut] = []
+
+    for index, person in enumerate(gallery.people):
+        photos = _photos_of(person)
+        if len(photos) < 2:
+            continue
+
+        for held in photos:
+            # Rebuild this person from everything except the held-out photo.
+            keep = [
+                vector for vector, source in zip(person.embeddings, person.sources)
+                if source.split(" (")[0] != held
+            ]
+            if not keep:
+                continue
+
+            reduced = Gallery()
+            reduced._set_people([
+                Person(person.name, np.vstack(keep).astype(np.float32),
+                       [s for s in person.sources if s.split(" (")[0] != held])
+                if i == index else other
+                for i, other in enumerate(gallery.people)
+            ])
+
+            image = imread_unicode(Path(held))
+            if image is None:
+                continue
+            face = engine.embed_reference(image, min_face_size=24)
+            if face is None or face.embedding is None:
+                results.append(HoldOut(person.name, Path(held).name, matched="",
+                                       score=0.0, detected=False))
+                continue
+
+            match = reduced.identify(face.embedding, recognition.threshold,
+                                     recognition.margin, recognition.unknown_label)
+            results.append(HoldOut(
+                person=person.name, photo=Path(held).name, matched=match.name,
+                score=match.score, runner_up=match.runner_up,
+                runner_up_score=match.runner_up_score,
+            ))
+
+    return results
+
+
 def run(config: Optional[AppConfig] = None, engine: Optional[FaceEngine] = None,
         gallery: Optional[Gallery] = None,
         degradations: Optional[List[Tuple[str, Callable]]] = None) -> Report:
-    """Degrade every reference photo and see whether it still finds its owner."""
+    """Check a gallery two ways: degraded copies, and photos held out of it."""
     config = config or AppConfig()
     engine = engine or FaceEngine(config.face).load()
     if gallery is None:
@@ -240,7 +395,9 @@ def run(config: Optional[AppConfig] = None, engine: Optional[FaceEngine] = None,
 
     for person in gallery.people:
         # ``sources`` records mirrored copies too; only the real files are here.
-        photos = sorted({source.split(" (")[0] for source in person.sources})
+        photos = _photos_of(person)
+        if len(photos) < 2:
+            report.single_photo.append(person.name)
         for photo in photos:
             image = imread_unicode(Path(photo))
             if image is None:
@@ -270,4 +427,5 @@ def run(config: Optional[AppConfig] = None, engine: Optional[FaceEngine] = None,
                     unknown_label=recognition.unknown_label,
                 ))
 
+    report.holdouts = hold_out(gallery, engine, config)
     return report

@@ -120,12 +120,31 @@ It is a measurement on your data, not a benchmark: six people is an easier
 problem than six hundred, so run it again after adding more. The same check is
 a button in the web UI.
 
-**It is also an easier test than reality.** It degrades *the photo you enrolled*,
-which scores around 0.96 even heavily blurred; a different photo of the same
-person on a different day scores 0.64–0.84. So a good self-check result means
-"nothing here is broken", not "these people are far apart". The number that
-proves that is a second photo of someone, taken another day, coming back with
-their name on it.
+Degrading a photo you enrolled is an easier question than a photo taken
+another day — the first scores ~0.96 even heavily blurred, the second 0.64–0.84.
+So the check runs a second, harder test wherever it can: for anyone with two or
+more photos, each one is held out and identified by a gallery rebuilt without
+it. That is the question that matters, and it needs nothing but photos you
+already have.
+
+```
+Held-out test: 4/4 recognised from a gallery that did not contain that photo
+  same person, a different photo: 0.738 to 0.841
+  nearest other person:            0.017 to 0.069
+```
+
+With one photo each it says so plainly rather than implying more than it
+measured:
+
+```
+Held-out test: not possible - everyone has only one photo.
+  The check above degrades the photo you enrolled, which is an easier
+  question than a different photo taken another day.
+```
+
+So: a clean run with one photo each means "nothing is broken". A clean
+**held-out** run means "these people are actually told apart". Adding a second
+photo of somebody, taken another day, is what turns the first into the second.
 
 ## Run it in a browser
 
