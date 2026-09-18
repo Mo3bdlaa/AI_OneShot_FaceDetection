@@ -169,7 +169,9 @@ pip install ultralytics
 python run.py --source clip.mp4 --body yolo --yolo-model yolov8n.pt
 ```
 
-Use `--body estimate` to force the cheap path, or `--body off` for faces only.
+The YOLO weights download on first use into the current directory. YOLO is a
+second model per frame, so it does cost speed — use `--body estimate` to force
+the free path, or `--body off` for faces only.
 
 ### Privacy
 
