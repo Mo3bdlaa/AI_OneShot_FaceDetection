@@ -440,6 +440,11 @@ frame, so the display uses the median age and majority gender over a rolling
 window. It loads one more model and costs roughly 30% throughput, so it is off
 unless asked for.
 
+Gender came back right on all four test photos. **Age did not**: the same man
+was estimated at 33, 33, 45 and 46 across four photos — a thirteen-year spread
+on one face — so the `~` in `~29` is doing a lot of work. Read it as a decade,
+not a number.
+
 ```bash
 python run.py --source clip.mp4 --attributes
 ```
@@ -555,6 +560,52 @@ trade identities whenever the lighting shifts.
 **Voting instead of per-frame labels.** A blink, a blur or a half-turn can drop
 one frame below the threshold. Each track votes over a sliding window and shows
 the winner, so the name on screen stays put while the person moves.
+
+## What has been verified, and what has not
+
+Numbers in this README are measured, and it is worth being clear about how
+narrow the measurements are.
+
+**Measured on real data**
+
+| | how |
+|---|---|
+| Same person scores 0.64–0.84, strangers 0.02–0.07 | four photos of **one** person, different days and cameras |
+| One-shot works end to end | enrolled from one photo, recognised in 89/89 frames built from three others |
+| Sharpness floor of 80 | ten photos from two sources scored 112–729; unusable ones 25–61 |
+| ReID limits (0.34–0.81 strangers vs 0.97 same body) | six real people in one photograph |
+| Dropping unused models is 2.3× faster | timed, identical embeddings |
+| The recognition throttle skips ~90% of embeddings | timed on a four-person clip |
+
+**Not verified, and you should assume nothing**
+
+- **One person.** The 0.64–0.84 figure comes from four photos of a single man.
+  One person is not a sample. Other ages, skin tones, glasses, beards grown or
+  shaved, heavy make-up — none of it is tested, and the default threshold may
+  not suit them.
+- **Small galleries.** Seven people, maximum. The closest stranger pair climbs
+  steadily with gallery size — 0.006 at two people, 0.206 at seven, with no
+  sign of levelling off — and the threshold is 0.38. There is headroom at
+  seven. Nobody has measured fifty, and the trend says it will be tighter.
+- **No real video.** Every "video" here is still images composited into
+  synthetic motion. Real footage brings rolling shutter, hard compression,
+  fast movement, faces at distance and changing light, and the tracker has
+  never met any of it.
+- **No real camera.** `--source 0`, `--realtime` and the frame-dropping
+  reader were written against files. No webcam was available to test them.
+- **No RTSP or HTTP stream** has ever been opened.
+- **No GPU.** `--device cuda` has never run. The code path exists and is not
+  known to work.
+- **Age estimates are not trustworthy.** Across four photos of the same man,
+  the model returned 33, 33, 45 and 46 — a thirteen-year spread on one face.
+  Gender was right four times out of four. Treat the age as a wide hint.
+- **Docker.** The image was built and run successfully, but not rebuilt from
+  scratch after the most recent changes, because Docker Hub rate-limited the
+  base image pull. CI builds it on every push.
+
+The fastest way to find out whether it works for *your* people is
+`--self-check` with two photos of somebody, which runs the held-out test above
+on your own data.
 
 ## Tests
 

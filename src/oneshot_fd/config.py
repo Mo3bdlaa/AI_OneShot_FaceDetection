@@ -49,7 +49,9 @@ class FaceConfig:
     device: str = "auto"
     #: Also estimate age and gender for every face and show them on screen.
     #: This loads an extra model and roughly doubles the per-face cost, so it
-    #: is off unless you ask for it.
+    #: is off unless you ask for it. Gender was right on all four test photos;
+    #: age was not - the same man measured 33, 33, 45 and 46 - so the age is a
+    #: decade-wide hint, not a number.
     attributes: bool = False
     #: Directory used to store the downloaded model packs.
     model_root: Optional[Path] = None

@@ -345,3 +345,21 @@ def test_someone_with_one_photo_is_listed_not_held_out(tmp_path):
                            gallery)
     assert report.holdouts == []
     assert report.single_photo == ["Solo"]
+
+
+# ------------------------------------------------- guarding a documented limit
+
+def test_the_report_never_claims_more_than_one_photo_can_show():
+    """A clean run on single-photo people must not read as an accuracy result.
+
+    This is the mistake the whole held-out test exists to prevent, so it is
+    worth a test of its own: degraded copies of one photo score ~0.96 whatever
+    the gallery looks like, and saying 'separates cleanly' on that basis would
+    be wrong.
+    """
+    report = Report(threshold=0.4, people=5, trials=[trial()] * 35,
+                    single_photo=["A", "B", "C", "D", "E"])
+    advice = report.advice()
+    assert report.recall == 1.0
+    assert "separates cleanly" not in advice
+    assert "only shows the pipeline works" in advice
