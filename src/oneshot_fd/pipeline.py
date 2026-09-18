@@ -76,6 +76,9 @@ class Pipeline:
         self._open_tracks: Dict[int, Appearance] = {}
         self._csv_file = None
         self._csv_writer = None
+        #: Counters behind the "embeddings skipped" line in the run summary.
+        self._embeddings = 0
+        self._skipped_embeddings = 0
 
     # --------------------------------------------------------------- startup
     def prepare(self) -> "Pipeline":
@@ -125,12 +128,10 @@ class Pipeline:
         )
 
         tracks: List[Track]
-        if should_detect:
-            detections = self._detect(work)
-            if self.config.tracking.enabled:
-                tracks = self.tracker.update(detections, timestamp)
-            else:
-                tracks = self._as_tracks(detections)
+        if should_detect and self.config.tracking.enabled:
+            tracks = self._detect_and_track(work, timestamp)
+        elif should_detect:
+            tracks = self._as_tracks(self._detect(work))
         else:
             tracks = self.tracker.update([], timestamp)
 
@@ -149,22 +150,61 @@ class Pipeline:
         return FrameResult(frame=output, tracks=tracks, index=index,
                            timestamp=timestamp, fps=fps, detected=should_detect)
 
-    def _detect(self, frame: np.ndarray) -> List[dict]:
-        """Faces -> embeddings -> names -> matching body boxes."""
-        faces = self.engine.detect(frame)
-        if not faces:
-            return []
+    def _detect_and_track(self, frame: np.ndarray, timestamp: float) -> List[Track]:
+        """Detect, recognise and track - skipping work the tracker makes needless.
 
+        Locating faces costs about a tenth of what embedding them does, so the
+        association is worked out first and only the faces that still need an
+        answer are embedded. A track that has just named the same person
+        several frames running can be taken at its word for a few more.
+        """
         recognition = self.config.recognition
-        matches = self.gallery.identify_batch(
-            [face.embedding for face in faces],
-            recognition.threshold,
-            recognition.margin,
-            recognition.unknown_label,
-        )
+        self.tracker.begin_frame()
 
+        faces = self.engine.locate(frame)
+        assignment = self.tracker.associate([face.box for face in faces])
+
+        names: List[str] = []
+        scores: List[float] = []
+        for position, face in enumerate(faces):
+            track = self._settled_track(assignment[position])
+            if track is not None:
+                # Reuse the name this track already earned.
+                names.append(track.label)
+                scores.append(track.label_score)
+                self._skipped_embeddings += 1
+                continue
+            self.engine.embed(frame, face)
+            match = self.gallery.identify(
+                face.embedding, recognition.threshold, recognition.margin,
+                recognition.unknown_label,
+            )
+            names.append(match.name)
+            scores.append(match.score)
+            self._embeddings += 1
+
+        detections = self._build_detections(frame, faces, names, scores)
+        return self.tracker.commit(detections, assignment, timestamp)
+
+    def _settled_track(self, track_index: Optional[int]) -> Optional[Track]:
+        """The track at ``track_index``, if it may skip this frame's embedding."""
+        every = self.config.recognition.reverify_every
+        if every <= 0 or track_index is None:
+            return None
+        if not 0 <= track_index < len(self.tracker.tracks):
+            return None
+        track = self.tracker.tracks[track_index]
+        if not track.is_settled(self.config.recognition.unknown_label):
+            return None
+        if self.tracker.frame_index - track.verified_at >= every:
+            return None
+        return track
+
+    def _build_detections(self, frame: np.ndarray, faces: List, names: List[str],
+                          scores: List[float]) -> List[dict]:
+        """Attach body boxes and package everything the tracker needs."""
         body_boxes: List[Optional[Sequence[int]]] = [None] * len(faces)
-        if self.bodies.enabled:
+        if self.bodies.enabled and faces:
             found = self.bodies.bodies_for_faces(frame, [face.box for face in faces])
             for position, body in enumerate(found):
                 body_boxes[position] = body.box
@@ -175,11 +215,31 @@ class Pipeline:
                 "score": face.score,
                 "landmarks": face.landmarks,
                 "body_box": body_boxes[position],
-                "name": match.name,
-                "similarity": match.score,
+                "name": names[position],
+                "similarity": scores[position],
+                "age": face.age,
+                "gender": face.gender,
             }
-            for position, (face, match) in enumerate(zip(faces, matches))
+            for position, face in enumerate(faces)
         ]
+
+    def _detect(self, frame: np.ndarray) -> List[dict]:
+        """Faces -> embeddings -> names -> matching body boxes, with no shortcuts."""
+        faces = self.engine.detect(frame)
+        if not faces:
+            return []
+        self._embeddings += len(faces)
+
+        recognition = self.config.recognition
+        matches = self.gallery.identify_batch(
+            [face.embedding for face in faces],
+            recognition.threshold,
+            recognition.margin,
+            recognition.unknown_label,
+        )
+        return self._build_detections(
+            frame, faces, [m.name for m in matches], [m.score for m in matches]
+        )
 
     def _as_tracks(self, detections: List[dict]) -> List[Track]:
         """Build throwaway tracks when tracking is switched off."""
@@ -305,7 +365,16 @@ class Pipeline:
             entry[1] += 1
             entry[2] = max(entry[2], appearance.best_score)
 
-        lines = ["Recognised people:"]
+        lines = []
+        total = self._embeddings + self._skipped_embeddings
+        if self._skipped_embeddings and total:
+            lines.append(
+                f"Recognition throttle: {self._skipped_embeddings}/{total} face embeddings "
+                f"skipped ({self._skipped_embeddings / total:.0%}) because their tracks "
+                "had already settled."
+            )
+            lines.append("")
+        lines.append("Recognised people:")
         for name, (duration, count, best) in sorted(totals.items(), key=lambda kv: -kv[1][0]):
             lines.append(
                 f"  {name:<22} {duration:7.1f}s over {int(count):3d} appearance(s), "

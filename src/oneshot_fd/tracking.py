@@ -38,11 +38,17 @@ class Track:
 
     #: Rolling (name, similarity) votes used to smooth the displayed label.
     votes: Deque[Tuple[str, float]] = field(default_factory=lambda: deque(maxlen=12))
+    #: Rolling age/gender estimates. Single-frame estimates jump around by a
+    #: decade, so the display uses the median age and the majority gender.
+    age_votes: Deque[int] = field(default_factory=lambda: deque(maxlen=30))
+    gender_votes: Deque[str] = field(default_factory=lambda: deque(maxlen=30))
     label: str = "Unknown"
     label_score: float = 0.0
     best_score: float = 0.0
 
     velocity: Tuple[float, float] = (0.0, 0.0)
+    #: Frame index of the last vote that came from a real face embedding.
+    verified_at: int = 0
     first_frame: int = 0
     first_time: float = 0.0
     last_time: float = 0.0
@@ -50,6 +56,36 @@ class Track:
     @property
     def confirmed(self) -> bool:
         return self.label != "Unknown"
+
+    @property
+    def estimated_age(self) -> Optional[int]:
+        """Median of the recent age estimates in years, or ``None``.
+
+        Named apart from :attr:`age`, which counts frames since this track was
+        last seen - a different thing entirely.
+        """
+        if not self.age_votes:
+            return None
+        return int(np.median(np.asarray(self.age_votes)))
+
+    @property
+    def estimated_gender(self) -> Optional[str]:
+        """Majority gender over the recent estimates."""
+        if not self.gender_votes:
+            return None
+        return Counter(self.gender_votes).most_common(1)[0][0]
+
+    def is_settled(self, unknown_label: str = "Unknown", agreeing: int = 4) -> bool:
+        """True when the last few votes all named the same known person.
+
+        Used to decide whether this face still needs the expensive embedding,
+        or whether the track has earned the right to be taken at its word for
+        a few frames.
+        """
+        if self.label == unknown_label or len(self.votes) < agreeing:
+            return False
+        recent = list(self.votes)[-agreeing:]
+        return all(name == self.label for name, _ in recent)
 
     def predict(self) -> None:
         """Nudge the box along its recent motion when a frame has no detection."""
@@ -125,27 +161,49 @@ class Tracker:
         self._next_id = 1
         self._frame_index = 0
 
+    @property
+    def frame_index(self) -> int:
+        return self._frame_index
+
     def update(self, detections: Sequence[dict], timestamp: float = 0.0) -> List[Track]:
         """Associate detections with tracks and return the visible ones.
 
         Each detection is a dict with ``box`` and optionally ``score``,
         ``body_box``, ``landmarks``, ``name`` and ``similarity``.
-        """
-        self._frame_index += 1
 
+        This is the whole cycle in one call. Callers that need to look at the
+        association *before* deciding how much work to do on each detection -
+        the recognition throttle does - use :meth:`begin_frame`,
+        :meth:`associate` and :meth:`commit` instead.
+        """
+        self.begin_frame()
+        assignment = self.associate([d["box"] for d in detections])
+        return self.commit(detections, assignment, timestamp)
+
+    def begin_frame(self) -> None:
+        """Age every track by one frame and coast it along its motion."""
+        self._frame_index += 1
         for track in self.tracks:
             track.age += 1
             track.frames_seen += 1
             track.predict()
 
+    def associate(self, boxes: Sequence[Sequence[int]]) -> List[Optional[int]]:
+        """Work out which track each detected box belongs to.
+
+        Returns one entry per box: the index into :attr:`tracks`, or ``None``
+        for a box that starts a new track. Pure - nothing is modified, so the
+        caller can act on the answer before committing to it.
+        """
         matched_detections: set = set()
         matched_tracks: set = set()
+        assignment: List[Optional[int]] = [None] * len(boxes)
 
         # Stage 1: overlap. Reliable whenever the person barely moved.
         pairs: List[Tuple[float, int, int]] = []
-        for det_index, detection in enumerate(detections):
+        for det_index, box in enumerate(boxes):
             for track_index, track in enumerate(self.tracks):
-                iou = box_iou(detection["box"], track.box)
+                iou = box_iou(box, track.box)
                 if iou >= self.config.iou_threshold:
                     pairs.append((iou, det_index, track_index))
         pairs.sort(reverse=True)
@@ -155,7 +213,7 @@ class Tracker:
                 continue
             matched_detections.add(det_index)
             matched_tracks.add(track_index)
-            self._apply(self.tracks[track_index], detections[det_index], timestamp)
+            assignment[det_index] = track_index
 
         # Stage 2: centre distance. Fast motion - or --detect-every N, where
         # consecutive detections are N frames apart - can move a face clean off
@@ -163,14 +221,14 @@ class Tracker:
         # relative to the face size still links them, and the size check keeps
         # a nearby second face from stealing the track.
         leftovers = [
-            (det_index, detection) for det_index, detection in enumerate(detections)
+            (det_index, box) for det_index, box in enumerate(boxes)
             if det_index not in matched_detections
         ]
         if leftovers:
             candidates: List[Tuple[float, int, int]] = []
-            for det_index, detection in leftovers:
-                det_cx, det_cy = box_center(detection["box"])
-                det_size = max(1.0, detection["box"][2] - detection["box"][0])
+            for det_index, box in leftovers:
+                det_cx, det_cy = box_center(box)
+                det_size = max(1.0, box[2] - box[0])
                 for track_index, track in enumerate(self.tracks):
                     if track_index in matched_tracks:
                         continue
@@ -187,12 +245,19 @@ class Tracker:
                     continue
                 matched_detections.add(det_index)
                 matched_tracks.add(track_index)
-                self._apply(self.tracks[track_index], detections[det_index], timestamp)
+                assignment[det_index] = track_index
 
+        return assignment
+
+    def commit(self, detections: Sequence[dict], assignment: Sequence[Optional[int]],
+               timestamp: float = 0.0) -> List[Track]:
+        """Apply the detections to the tracks ``associate`` picked out."""
         for det_index, detection in enumerate(detections):
-            if det_index in matched_detections:
-                continue
-            self._spawn(detection, timestamp)
+            track_index = assignment[det_index] if det_index < len(assignment) else None
+            if track_index is None:
+                self._spawn(detection, timestamp)
+            else:
+                self._apply(self.tracks[track_index], detection, timestamp)
 
         self.tracks = [t for t in self.tracks if t.age <= self.config.max_age]
         return self.visible()
@@ -207,6 +272,10 @@ class Tracker:
             track.body_box = detection["body_box"]
         if detection.get("landmarks") is not None:
             track.landmarks = detection["landmarks"]
+        if detection.get("age") is not None:
+            track.age_votes.append(int(detection["age"]))
+        if detection.get("gender") is not None:
+            track.gender_votes.append(str(detection["gender"]))
         if detection.get("name") is not None:
             track.vote(
                 detection["name"],
@@ -214,6 +283,7 @@ class Tracker:
                 self.recognition.unknown_label,
                 self.recognition.vote_ratio,
             )
+            track.verified_at = self._frame_index
 
     def _spawn(self, detection: dict, timestamp: float) -> Track:
         track = Track(

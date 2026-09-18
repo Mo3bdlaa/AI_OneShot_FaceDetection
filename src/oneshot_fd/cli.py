@@ -74,6 +74,10 @@ def build_parser() -> argparse.ArgumentParser:
                            help="how far the best match must beat the runner-up (default: 0.03)")
     rec_group.add_argument("--vote-window", type=int, default=12, metavar="N",
                            help="frames each track votes over before committing (default: 12)")
+    rec_group.add_argument("--reverify-every", type=int, default=0, metavar="N",
+                           help="once a track has settled on a name, re-run the expensive "
+                                "embedding only every N detections; 3-5 is a big speed win "
+                                "on live video (default: 0, verify every face)")
     rec_group.add_argument("--unknown-label", default="Unknown",
                            help="label for faces that match nobody (default: Unknown)")
     rec_group.add_argument("--rebuild-gallery", action="store_true",
@@ -88,6 +92,9 @@ def build_parser() -> argparse.ArgumentParser:
                              help="detector input size; lower is faster (default: 640)")
     model_group.add_argument("--det-threshold", type=float, default=0.5, metavar="F",
                              help="minimum face detector confidence (default: 0.5)")
+    model_group.add_argument("--attributes", action="store_true",
+                             help="also estimate age and gender and show them beside the "
+                                  "name (loads an extra model, roughly doubles per-face cost)")
     model_group.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"],
                              help="where to run the models (default: auto)")
     model_group.add_argument("--model-root", metavar="DIR",
@@ -151,6 +158,7 @@ def config_from_args(args: argparse.Namespace) -> AppConfig:
             model_name=args.model,
             det_size=args.det_size,
             det_threshold=args.det_threshold,
+            attributes=args.attributes,
             device=args.device,
             model_root=Path(args.model_root) if args.model_root else None,
         ),
@@ -158,6 +166,7 @@ def config_from_args(args: argparse.Namespace) -> AppConfig:
             threshold=args.threshold,
             margin=args.margin,
             vote_window=max(1, args.vote_window),
+            reverify_every=max(0, args.reverify_every),
             unknown_label=args.unknown_label,
         ),
         tracking=TrackingConfig(enabled=args.tracking),
@@ -166,6 +175,7 @@ def config_from_args(args: argparse.Namespace) -> AppConfig:
             show_face=args.face_box,
             show_body=args.body_box,
             show_landmarks=args.landmarks,
+            show_attributes=args.attributes,
             show_fps=args.hud,
             show_roster=args.hud,
             box_thickness=max(1, args.thickness),

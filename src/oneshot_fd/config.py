@@ -41,6 +41,10 @@ class FaceConfig:
     det_threshold: float = 0.5
     #: ``cpu``, ``cuda`` or ``auto``.
     device: str = "auto"
+    #: Also estimate age and gender for every face and show them on screen.
+    #: This loads an extra model and roughly doubles the per-face cost, so it
+    #: is off unless you ask for it.
+    attributes: bool = False
     #: Directory used to store the downloaded model packs.
     model_root: Optional[Path] = None
 
@@ -60,6 +64,10 @@ class RecognitionConfig:
     vote_ratio: float = 0.5
     #: Label used when nobody in the gallery matches.
     unknown_label: str = "Unknown"
+    #: Once a track has settled on a name, re-run the (expensive) embedding
+    #: only every N detections. 0 verifies every face on every detection,
+    #: which is the safe default; 3-5 is a large speed win on live video.
+    reverify_every: int = 0
 
 
 @dataclass
@@ -103,6 +111,8 @@ class DrawConfig:
     show_body: bool = True
     show_landmarks: bool = False
     show_score: bool = True
+    #: Show the estimated age and gender beside the name. Needs FaceConfig.attributes.
+    show_attributes: bool = False
     show_fps: bool = True
     show_roster: bool = True
     box_thickness: int = 2

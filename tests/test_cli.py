@@ -81,3 +81,16 @@ def test_gallery_flags():
     assert config.gallery.path == Path("photos")
     assert config.gallery.force_rebuild is True
     assert config.gallery.use_flip_augmentation is False
+
+
+def test_attributes_flag_turns_on_both_the_model_and_the_display():
+    config = parse("--attributes")
+    assert config.face.attributes is True
+    assert config.draw.show_attributes is True
+    assert parse().face.attributes is False, "off by default, it costs real time"
+
+
+def test_reverify_flag():
+    assert parse("--reverify-every", "5").recognition.reverify_every == 5
+    assert parse().recognition.reverify_every == 0, "verify every face by default"
+    assert parse("--reverify-every", "-2").recognition.reverify_every == 0

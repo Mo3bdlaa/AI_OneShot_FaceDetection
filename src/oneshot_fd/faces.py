@@ -32,6 +32,8 @@ class DetectedFace:
     score: float                    # detector confidence
     embedding: Optional[np.ndarray] # L2-normalised ArcFace vector
     landmarks: Optional[np.ndarray] = None  # 5x2 keypoints, if available
+    age: Optional[int] = None       # estimated years, when --attributes is on
+    gender: Optional[str] = None    # "M" or "F", when --attributes is on
 
     @property
     def width(self) -> int:
@@ -97,7 +99,17 @@ class FaceEngine:
         providers = _resolve_providers(self.config.device)
         self._ctx_id = 0 if providers[0].startswith("CUDA") else -1
 
-        kwargs = {"name": self.config.model_name, "providers": providers}
+        # FaceAnalysis loads the 68- and 106-point landmark models by default.
+        # We never use them and they cost roughly 60% of the runtime, so we ask
+        # only for what we need - plus genderage when --attributes is on.
+        modules = ["detection", "recognition"]
+        if self.config.attributes:
+            modules.append("genderage")
+        kwargs = {
+            "name": self.config.model_name,
+            "providers": providers,
+            "allowed_modules": modules,
+        }
         if self.config.model_root:
             kwargs["root"] = str(Path(self.config.model_root).expanduser())
 
@@ -120,38 +132,74 @@ class FaceEngine:
         return self._app
 
     # ------------------------------------------------------------- inference
-    def detect(self, frame: np.ndarray, max_faces: Optional[int] = None) -> List[DetectedFace]:
-        """Detect and embed every face in a BGR frame, biggest first."""
+    def locate(self, frame: np.ndarray, max_faces: Optional[int] = None) -> List[DetectedFace]:
+        """Find the faces in a frame *without* embedding them.
+
+        Detection is cheap (~100 ms for a 960px frame on CPU); the ArcFace
+        embedding is not (~100 ms per face). Keeping them apart lets the
+        pipeline skip the expensive half for faces it has already identified.
+        """
         if frame is None or frame.size == 0:
             return []
 
         height, width = frame.shape[:2]
-        raw = self.app.get(frame)
+        boxes, landmarks = self.app.det_model.detect(
+            frame, max_num=max_faces or 0, metric="default"
+        )
+        if boxes is None or len(boxes) == 0:
+            return []
 
-        faces: List[DetectedFace] = []
-        for item in raw:
-            box = clip_box(item.bbox, width, height)
-            embedding = getattr(item, "normed_embedding", None)
-            if embedding is None:
-                embedding = getattr(item, "embedding", None)
-                if embedding is not None:
-                    embedding = l2_normalize(np.asarray(embedding, dtype=np.float32))
-            else:
-                embedding = np.asarray(embedding, dtype=np.float32)
-
-            landmarks = getattr(item, "kps", None)
-            faces.append(
-                DetectedFace(
-                    box=box,
-                    score=float(getattr(item, "det_score", 0.0)),
-                    embedding=embedding,
-                    landmarks=np.asarray(landmarks) if landmarks is not None else None,
-                )
+        faces = [
+            DetectedFace(
+                box=clip_box(row[:4], width, height),
+                score=float(row[4]) if len(row) > 4 else 0.0,
+                embedding=None,
+                landmarks=np.asarray(landmarks[index]) if landmarks is not None else None,
             )
-
+            for index, row in enumerate(boxes)
+        ]
         faces.sort(key=lambda f: f.width * f.height, reverse=True)
-        if max_faces:
-            faces = faces[:max_faces]
+        return faces
+
+    def embed(self, frame: np.ndarray, face: DetectedFace) -> Optional[np.ndarray]:
+        """Compute and attach the ArcFace embedding for one located face.
+
+        When ``--attributes`` is on, the age and gender estimates are filled in
+        at the same time, since both work from the same aligned crop.
+        """
+        if face.embedding is not None:
+            return face.embedding
+        if face.landmarks is None:
+            return None
+
+        from insightface.app.common import Face as _Face
+
+        item = _Face(bbox=np.asarray(face.box, dtype=np.float32),
+                     kps=np.asarray(face.landmarks, dtype=np.float32),
+                     det_score=face.score)
+        self.app.models["recognition"].get(frame, item)
+
+        genderage = self.app.models.get("genderage")
+        if genderage is not None:
+            try:
+                genderage.get(frame, item)
+                face.age = int(item.age) if item.age is not None else None
+                face.gender = {1: "M", 0: "F"}.get(int(item.gender)) \
+                    if item.gender is not None else None
+            except Exception as exc:          # an estimate is never worth a crash
+                LOGGER.debug("Age/gender estimation failed: %s", exc)
+        embedding = getattr(item, "normed_embedding", None)
+        if embedding is None:
+            raw = getattr(item, "embedding", None)
+            embedding = None if raw is None else l2_normalize(np.asarray(raw, np.float32))
+        face.embedding = None if embedding is None else np.asarray(embedding, dtype=np.float32)
+        return face.embedding
+
+    def detect(self, frame: np.ndarray, max_faces: Optional[int] = None) -> List[DetectedFace]:
+        """Locate and embed every face in a BGR frame, biggest first."""
+        faces = self.locate(frame, max_faces)
+        for face in faces:
+            self.embed(frame, face)
         return faces
 
     def embed_reference(self, image: np.ndarray, min_face_size: int = 40) -> Optional[DetectedFace]:

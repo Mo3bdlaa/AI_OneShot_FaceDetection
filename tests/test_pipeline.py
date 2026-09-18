@@ -15,18 +15,38 @@ STRANGER = np.array([0, 0, 1, 0], np.float32)
 
 
 class FakeEngine:
-    """Returns a scripted list of faces per frame instead of running a model."""
+    """Returns a scripted list of faces per frame instead of running a model.
+
+    It mirrors the real split: ``locate`` hands back faces with no embedding,
+    and ``embed`` fills one in - so the tests see exactly how often the
+    expensive half would have run.
+    """
 
     def __init__(self, script):
         self.script = script
         self.calls = 0
+        self.embeddings = 0
 
     def load(self):
         return self
 
-    def detect(self, frame, max_faces=None):
-        faces = self.script[min(self.calls, len(self.script) - 1)]
+    def locate(self, frame, max_faces=None):
+        scripted = self.script[min(self.calls, len(self.script) - 1)]
         self.calls += 1
+        return [DetectedFace(box=f.box, score=f.score, embedding=None,
+                             landmarks=f.embedding) for f in scripted]
+
+    def embed(self, frame, face):
+        # The fake smuggles the embedding through ``landmarks`` so that
+        # ``locate`` can hand back a genuinely un-embedded face.
+        self.embeddings += 1
+        face.embedding = face.landmarks
+        return face.embedding
+
+    def detect(self, frame, max_faces=None):
+        faces = self.locate(frame, max_faces)
+        for face in faces:
+            self.embed(frame, face)
         return faces
 
 
@@ -129,3 +149,61 @@ def test_frames_with_no_faces_are_fine(frame):
     result = pipeline.process_frame(frame, 0, 0.0)
     assert result.tracks == []
     assert result.frame.shape == frame.shape
+
+
+# --------------------------------------------------------- recognition throttle
+
+def test_throttle_reuses_a_settled_name_instead_of_re_embedding(frame):
+    """A track that keeps naming the same person should stop paying for it."""
+    pipeline = make_pipeline([[face((100, 100, 200, 220), MOHAMMED)]])
+    pipeline.config.recognition.reverify_every = 5
+
+    for index in range(12):
+        result = pipeline.process_frame(frame, index, index / 25.0)
+
+    assert [t.label for t in result.tracks] == ["Mohammed"]
+    assert pipeline._skipped_embeddings > 0, "the throttle never kicked in"
+    assert pipeline.engine.embeddings < 12, "every frame still paid for an embedding"
+
+
+def test_throttle_still_re_verifies_periodically(frame):
+    pipeline = make_pipeline([[face((100, 100, 200, 220), MOHAMMED)]])
+    pipeline.config.recognition.reverify_every = 3
+
+    for index in range(12):
+        pipeline.process_frame(frame, index, index / 25.0)
+
+    # Roughly one embedding in three, never zero.
+    assert 3 <= pipeline.engine.embeddings <= 8
+
+
+def test_throttle_off_by_default_embeds_every_face(frame):
+    pipeline = make_pipeline([[face((100, 100, 200, 220), MOHAMMED)]])
+    for index in range(6):
+        pipeline.process_frame(frame, index, index / 25.0)
+    assert pipeline.engine.embeddings == 6
+    assert pipeline._skipped_embeddings == 0
+
+
+def test_an_unsettled_track_is_always_embedded(frame):
+    """Unknown faces never qualify for the shortcut."""
+    pipeline = make_pipeline([[face((100, 100, 200, 220), STRANGER)]])
+    pipeline.config.recognition.reverify_every = 5
+    for index in range(10):
+        pipeline.process_frame(frame, index, index / 25.0)
+    assert pipeline.engine.embeddings == 10
+    assert pipeline._skipped_embeddings == 0
+
+
+def test_a_new_face_is_never_taken_at_another_tracks_word(frame):
+    """A second person entering must be embedded, not handed a neighbour's name."""
+    script = [[face((100, 100, 200, 220), MOHAMMED)]] * 8 + [
+        [face((100, 100, 200, 220), MOHAMMED), face((700, 100, 800, 220), SARA)]
+    ] * 4
+    pipeline = make_pipeline(script)
+    pipeline.config.recognition.reverify_every = 5
+
+    for index in range(12):
+        result = pipeline.process_frame(frame, index, index / 25.0)
+
+    assert {t.label for t in result.tracks} == {"Mohammed", "Sara"}

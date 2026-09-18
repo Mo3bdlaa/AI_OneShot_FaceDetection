@@ -121,6 +121,14 @@ class Renderer:
             elif config.show_score and is_unknown and track.label_score > 0:
                 label = f"{label} ({track.label_score:.2f})"
             label = f"#{track.track_id} {label}"
+            if config.show_attributes:
+                years = track.estimated_age
+                attributes = " ".join(
+                    part for part in (track.estimated_gender, f"~{years}" if years else None)
+                    if part
+                )
+                if attributes:
+                    label = f"{label} | {attributes}"
 
             draw_label(canvas, label, (int(track.box[0]), int(track.box[1]) - 2),
                        color, config.font_scale, 1, above=True)

@@ -135,20 +135,32 @@ deliberately cautious middle.
 
 ### Speed
 
-CPU, 720p, all defaults: about **1 FPS**. These flags trade a little accuracy
-for a lot of speed — together they gave ~3.5× on the same clip with identical
-recognition results:
+Two things are already done for you: only the models that are actually used
+are loaded (the default InsightFace setup also loads 68- and 106-point
+landmark models that nothing here reads — dropping them measured **2.3× faster**
+for identical embeddings), and detection is separated from embedding so the
+expensive half can be skipped.
+
+On top of that:
 
 ```bash
 python run.py --source 0 \
+    --reverify-every 5 \    # settled tracks skip the embedding for a few frames
     --det-size 320 \        # smaller detector input
     --max-width 640 \       # downscale before processing
     --detect-every 3 \      # run the models every 3rd frame, track in between
     --model buffalo_s       # the lighter model pack
 ```
 
-`--detect-every N` is the big one: the tracker carries the boxes through the
-skipped frames, so the overlay still updates every frame.
+`--reverify-every N` is the biggest single win. Locating a face costs about a
+tenth of what embedding it does, so once a track has named the same person
+several frames running it is taken at its word for N more detections. On a
+four-person clip that skipped **90% of the embeddings and ran 2.9× faster**,
+with the same people recognised. It is off by default because it trades a
+little identity paranoia for speed; 3–5 is a good setting for live video.
+
+`--detect-every N` skips detection too: the tracker carries the boxes through
+the skipped frames, so the overlay still updates every frame.
 
 For real-time work, a GPU (`pip install onnxruntime-gpu`, `--device cuda`)
 takes it to comfortably above 30 FPS.
@@ -173,6 +185,18 @@ The YOLO weights download on first use into the current directory. YOLO is a
 second model per frame, so it does cost speed — use `--body estimate` to force
 the free path, or `--body off` for faces only.
 
+### Age and gender
+
+`--attributes` also estimates each person's age and gender and shows them
+beside the name (`Mohammed 0.92 | M ~29`). The estimates are noisy frame to
+frame, so the display uses the median age and majority gender over a rolling
+window. It loads one more model and costs roughly 30% throughput, so it is off
+unless asked for.
+
+```bash
+python run.py --source clip.mp4 --attributes
+```
+
 ### Privacy
 
 `--blur-unknown` pixelates the face of anyone who is *not* in your input
@@ -195,10 +219,12 @@ recognition
   -t, --threshold F      similarity needed to claim a face (default: 0.38)
       --margin F         how far the best match must beat the runner-up (0.03)
       --vote-window N    frames a track votes over before committing (12)
+      --reverify-every N settled tracks skip the embedding for N detections
       --rebuild-gallery  re-enrol every photo, ignoring the cache
 
 models / speed
       --model NAME       buffalo_l (accurate) or buffalo_s (fast)
+      --attributes       also estimate and show age and gender
       --det-size N       detector input size (640)
       --device           auto | cpu | cuda
       --detect-every N   run the models every N frames and track in between
@@ -278,7 +304,7 @@ pip install pytest
 pytest
 ```
 
-77 tests covering geometry, gallery matching, tracking, body association,
+85 tests covering geometry, gallery matching, tracking, body association,
 source handling, rendering, CLI parsing and the pipeline. They use stand-in
 models, so they run in under a second and need no downloads.
 
