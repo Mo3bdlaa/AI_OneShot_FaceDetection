@@ -55,3 +55,15 @@ def test_format_timestamp():
     assert format_timestamp(0) == "00:00:00.000"
     assert format_timestamp(93.5) == "00:01:33.500"
     assert format_timestamp(-5) == "00:00:00.000"
+
+
+def test_detector_size_is_snapped_to_a_usable_multiple():
+    """SCRFD needs a multiple of 32, so odd sizes must be rounded, not crash."""
+    from oneshot_fd.faces import _snap_det_size
+
+    assert _snap_det_size(640) == 640
+    assert _snap_det_size(400) == 416          # rounded up, never down
+    assert _snap_det_size(319) == 320
+    assert all(_snap_det_size(n) >= n for n in range(128, 1024, 7)), "never lose resolution"
+    assert _snap_det_size(10) == 128           # never below a workable minimum
+    assert all(_snap_det_size(n) % 32 == 0 for n in range(128, 1024, 7))

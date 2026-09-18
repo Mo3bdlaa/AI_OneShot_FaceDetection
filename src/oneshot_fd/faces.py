@@ -42,6 +42,22 @@ class DetectedFace:
         return int(self.box[3] - self.box[1])
 
 
+def _snap_det_size(size: int) -> int:
+    """Round the detector input to something SCRFD can actually use.
+
+    SCRFD works on feature maps of stride 8, 16 and 32, so an input that is not
+    a multiple of 32 produces mismatched anchor grids and fails deep inside the
+    model with an unhelpful broadcast error. Rounding here turns a confusing
+    crash into a one-line notice, and it rounds *up* so nobody silently gets
+    less detection resolution than they asked for.
+    """
+    snapped = max(128, -(-int(size) // 32) * 32)
+    if snapped != size:
+        LOGGER.warning("Detector size %d is not a multiple of 32; using %d instead.",
+                       size, snapped)
+    return snapped
+
+
 def _resolve_providers(device: str) -> List[str]:
     """Pick ONNX Runtime providers, preferring the GPU when one is usable."""
     try:
@@ -91,7 +107,7 @@ class FaceEngine:
             "GPU" if self._ctx_id >= 0 else "CPU",
         )
         app = FaceAnalysis(**kwargs)
-        det_size = int(self.config.det_size)
+        det_size = _snap_det_size(int(self.config.det_size))
         app.prepare(ctx_id=self._ctx_id, det_size=(det_size, det_size),
                     det_thresh=float(self.config.det_threshold))
         self._app = app
