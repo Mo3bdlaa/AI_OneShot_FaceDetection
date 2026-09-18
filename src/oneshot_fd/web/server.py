@@ -447,6 +447,42 @@ def create_app(config: Optional[AppConfig] = None, token: Optional[str] = None):
             headers={"Content-Disposition": f'attachment; filename="{Path(path).name}"'},
         )
 
+    @app.post("/api/self-check")
+    def self_check():
+        """Measure recognition on this gallery and report what survives.
+
+        Slow - every reference photo is degraded seven ways and put back
+        through the models - so it refuses while a session is running rather
+        than competing with it for the CPU.
+        """
+        if session.is_running:
+            raise HTTPException(status_code=409,
+                                detail="Stop the running session first; this is slow.")
+
+        from .. import selfcheck
+
+        pipeline = session.ensure_pipeline()
+        report = selfcheck.run(config, pipeline.engine, pipeline.gallery)
+        return {
+            "people": report.people,
+            "attempted": report.attempted,
+            "recall": round(report.recall, 3),
+            "confused": len(report.confused),
+            "missed": len(report.missed),
+            "undetected": len(report.undetected),
+            "advice": report.advice(),
+            "text": report.format(),
+            "per_person": {
+                name: {
+                    "recognised": sum(t.correct for t in trials),
+                    "of": len(trials),
+                    "smallest_margin": round(
+                        min((t.margin for t in trials if t.correct), default=0.0), 3),
+                }
+                for name, trials in sorted(report.by_person().items())
+            },
+        }
+
     # --------------------------------------------------------------- analysis
     @app.post("/api/analyse")
     async def analyse(file: UploadFile = File(...), max_frames: int = Form(0)):

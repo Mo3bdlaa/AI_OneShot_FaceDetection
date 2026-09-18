@@ -38,6 +38,9 @@ examples:
 
   # just check the gallery loads
   python -m oneshot_fd --faces input_faces --list-people
+
+  # ... and check your people can actually be told apart
+  python -m oneshot_fd --faces input_faces --self-check
 """
 
 
@@ -72,6 +75,10 @@ def build_parser() -> argparse.ArgumentParser:
                           help="do not open a preview window (for servers and batch runs)")
     io_group.add_argument("--list-people", action="store_true",
                           help="build the gallery, print who is in it and exit")
+    io_group.add_argument("--self-check", action="store_true",
+                          help="degrade every reference photo the way video degrades a "
+                               "face, put it back through recognition, and report whether "
+                               "your people are actually told apart")
 
     web_group = parser.add_argument_group("web interface")
     web_group.add_argument("--serve", action="store_true",
@@ -253,6 +260,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         if args.list_people:
             return list_people(config)
+        if args.self_check:
+            from .runner import self_check
+
+            return self_check(config)
         if args.serve:
             from .web import serve
 

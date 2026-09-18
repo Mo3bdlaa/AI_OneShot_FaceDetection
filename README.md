@@ -81,6 +81,45 @@ people look to this model, so the suggested threshold sits just above the
 closest pair. A pair at 0.9+ almost always means the same person is enrolled
 twice under two names — which otherwise shows up as maddening label flicker.
 
+## Will it work for *your* people?
+
+Every test in this project uses stand-in models, which leaves one question
+unanswered: on this gallery, on this machine, will these particular people be
+told apart? Nothing shipped can answer that, because the answer depends on
+photos only you have. So the check runs on yours:
+
+```bash
+python run.py --self-check
+```
+
+Each reference photo is degraded the way video degrades a face — mirrored,
+half and quarter size, blurred, dim, bright, heavily compressed — and matched
+back against the gallery:
+
+```
+Self-check: 6 people, 42 degraded copies, threshold 0.38
+
+By person:
+  Ahmed                  7/7 recognised, smallest margin +0.780
+  Sara                   7/7 recognised, smallest margin +0.816
+
+By kind of degradation:
+  quarter size           6/6
+  heavily compressed     6/6
+
+Overall: 100% recognised
+This gallery separates cleanly.
+```
+
+A wrong *name* and no name at all are reported separately, because they are
+different failures with different fixes — the first means raise the threshold,
+the second usually means two of your people are the same person enrolled twice.
+Only a wrong name exits non-zero, so this can gate a script.
+
+It is a measurement on your data, not a benchmark: six people is an easier
+problem than six hundred, so run it again after adding more. The same check is
+a button in the web UI.
+
 ## Run it in a browser
 
 ```bash
@@ -170,6 +209,7 @@ curl -O localhost:8000/api/appearances.csv          # who was seen, when
 | `POST /api/settings` | change thresholds and overlays while running |
 | `GET`/`POST`/`DELETE /api/gallery` | list, upload and remove reference photos |
 | `GET /api/calibrate` | the threshold the gallery itself suggests |
+| `POST /api/self-check` | measure recognition on this gallery |
 | `POST /api/gallery/from-track` | enrol whoever is on screen, by track id |
 | `POST /api/camera/start` | begin a session fed by the client's own camera |
 | `POST /api/camera/frame` | post one JPEG, get the annotated one back |
@@ -262,6 +302,7 @@ Recognised people:
 | Problem | Fix |
 |---|---|
 | Not sure what threshold to use | run `--list-people` and use the number it suggests |
+| Not sure it will work at all | run `--self-check` and read the per-person margins |
 | A known person shows up as `Unknown` | lower `--threshold` (try `0.32`), or add another photo of them |
 | A stranger gets confidently named | raise `--min-quality` to `0.45` so poor faces stay `Unknown` |
 | Two people get confused with each other | raise `--threshold` (try `0.45`) and `--margin` (try `0.08`) |

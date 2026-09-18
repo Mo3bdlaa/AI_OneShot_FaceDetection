@@ -59,6 +59,11 @@ class Match:
     score: float
     runner_up: str = ""
     runner_up_score: float = 0.0
+    #: Who the best score actually belonged to, even when the match was
+    #: refused. Without it a rejection says only "nobody", which is useless
+    #: when the question is *why* - and "it was nearly these two" is the
+    #: answer that tells you two people are enrolled twice.
+    best_name: str = ""
 
     @property
     def margin(self) -> float:
@@ -256,10 +261,11 @@ class Gallery:
             runner_up = self.people[second].name
             runner_up_score = float(per_person[second])
 
+        best_name = self.people[best_index].name
         if best_score < threshold or (best_score - runner_up_score) < margin:
-            return Match(unknown_label, best_score, runner_up, runner_up_score)
+            return Match(unknown_label, best_score, runner_up, runner_up_score, best_name)
 
-        return Match(self.people[best_index].name, best_score, runner_up, runner_up_score)
+        return Match(best_name, best_score, runner_up, runner_up_score, best_name)
 
     def identify_batch(self, embeddings: List[Optional[np.ndarray]], threshold: float,
                        margin: float = 0.0, unknown_label: str = "Unknown") -> List[Match]:

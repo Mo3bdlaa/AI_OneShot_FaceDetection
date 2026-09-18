@@ -82,3 +82,25 @@ def test_grouping_handles_both_folder_layouts(tmp_path):
     grouped = Gallery._group_images(tmp_path)
     assert set(grouped) == {"Mohammed", "Sara"}
     assert len(grouped["Sara"]) == 2
+
+
+def test_a_refused_match_still_says_who_it_nearly_was(two_people):
+    """Otherwise a rejection says only 'nobody', which cannot be diagnosed."""
+    # 45 degrees off Mohammed: about 0.707, so a 0.9 threshold refuses it.
+    face = l2_normalize(np.array([1, 0, 1, 0], np.float32))
+    match = two_people.identify(face, threshold=0.9)
+    assert match.name == "Unknown"
+    assert match.best_name == "Mohammed", "the near miss is the useful part"
+    assert match.score == pytest.approx(0.707, abs=0.01)
+
+
+def test_a_match_refused_by_the_margin_also_names_the_near_miss(two_people):
+    face = np.array([1, 0, 0, 0], np.float32)
+    match = two_people.identify(face, threshold=0.4, margin=2.0)
+    assert match.name == "Unknown"
+    assert match.best_name == "Mohammed"
+
+
+def test_an_accepted_match_reports_the_same_name_twice(two_people):
+    match = two_people.identify(np.array([1, 0, 0, 0], np.float32), threshold=0.4)
+    assert match.name == match.best_name == "Mohammed"

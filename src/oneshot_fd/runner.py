@@ -56,6 +56,24 @@ def list_people(config: AppConfig) -> int:
     return 0
 
 
+def self_check(config: AppConfig) -> int:
+    """Measure recognition on the user's own gallery and print the report."""
+    from . import selfcheck
+
+    pipeline = Pipeline(config)
+    pipeline.engine.load()
+    pipeline.gallery.build(pipeline.engine)
+
+    LOGGER.info("Degrading %d reference photo set(s) - this takes a moment.",
+                len(pipeline.gallery))
+    report = selfcheck.run(config, pipeline.engine, pipeline.gallery)
+    print()
+    print(report.format())
+    # A wrong *name* is a failure worth a non-zero exit, so this can gate a
+    # script. A missed match is a gap, not a mistake, and does not.
+    return 1 if report.confused else 0
+
+
 def run_app(config: AppConfig) -> int:
     """Run every configured source with preview, saving and reporting."""
     runtime = config.runtime

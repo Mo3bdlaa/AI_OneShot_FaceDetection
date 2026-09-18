@@ -146,6 +146,11 @@ ul.list li:last-child { border-bottom: 0; }
 #toast.bad { border-color: var(--bad); color: #ffb4ae; }
 details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; padding: 3px 0; }
 .hint { color: var(--muted); font-size: 12px; margin-top: 7px; }
+#checkReport {
+  margin: 10px 0 0; padding: 10px; background: var(--panel-2); border-radius: 7px;
+  font-size: 11.5px; line-height: 1.45; white-space: pre-wrap; max-height: 300px;
+  overflow-y: auto; color: var(--text);
+}
 </style>
 </head>
 <body>
@@ -224,8 +229,11 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; paddi
         <ul class="list" id="people" style="margin-top:12px"></ul>
         <div class="row tight" style="margin-top:12px">
           <button id="calibrateBtn">Suggest a threshold</button>
+          <button id="checkBtn" title="Degrade every photo and see who still matches">
+            Self-check</button>
         </div>
         <div class="hint" id="calibration"></div>
+        <pre id="checkReport" hidden></pre>
       </div>
     </div>
 
@@ -438,6 +446,28 @@ $('calibrateBtn').onclick = async () => {
     pushSettings();
   } catch (error) {
     $('calibration').textContent = '';
+    toast(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = label;
+  }
+};
+
+$('checkBtn').onclick = async () => {
+  const button = $('checkBtn');
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Checking…';
+  const box = $('checkReport');
+  box.hidden = false;
+  box.textContent = 'Degrading every reference photo and matching it back. ' +
+    'This takes a while — it is running the real models.';
+  try {
+    const data = await api('/api/self-check', { method: 'POST' });
+    box.textContent = data.text;
+  } catch (error) {
+    box.textContent = '';
+    box.hidden = true;
     toast(error.message, true);
   } finally {
     button.disabled = false;
