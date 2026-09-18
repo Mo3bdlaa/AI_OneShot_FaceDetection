@@ -106,6 +106,15 @@ class BodyConfig:
     yolo_model: str = "yolov8n.pt"
     #: Minimum confidence for a person box.
     conf: float = 0.35
+    #: Keep a person labelled from their clothing once their face is no longer
+    #: visible. Needs real person boxes, so it only works with the YOLO backend.
+    reid: bool = False
+    #: Appearance similarity a face-less body must reach to keep a name.
+    reid_threshold: float = 0.72
+    #: ... and how far it must beat the runner-up.
+    reid_margin: float = 0.05
+    #: Frames an appearance stays usable after its last face confirmation.
+    reid_memory: int = 150
     #: Body boxes are estimated as this many face heights tall.
     estimate_height_factor: float = 7.5
     #: ... and this many face widths wide.

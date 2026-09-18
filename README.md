@@ -275,6 +275,7 @@ models / speed
 
 body / overlay
       --body MODE        auto | yolo | estimate | off
+      --reid             hold a name on the body when the face is unreadable
       --blur-unknown     pixelate faces that are not in the gallery
       --landmarks        draw the five facial keypoints
       --mirror           mirror the frame (natural for a webcam)
@@ -346,8 +347,9 @@ pip install pytest
 pytest
 ```
 
-96 tests covering geometry, gallery matching, tracking, body association,
-source handling, rendering, CLI parsing and the pipeline. They use stand-in
+109 tests covering geometry, gallery matching, tracking, body association,
+source handling, rendering, CLI parsing, photo quality, body ReID and the
+pipeline. They use stand-in
 models, so they run in under a second and need no downloads.
 
 ## Requirements

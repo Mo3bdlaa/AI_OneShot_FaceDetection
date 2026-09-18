@@ -18,6 +18,7 @@ from .drawing import Renderer
 from .faces import FaceEngine
 from .gallery import Gallery
 from .quality import assess
+from .reid import AppearanceBank
 from .tracking import Track, Tracker
 from .utils import LOGGER, format_timestamp, resize_to_width
 
@@ -67,6 +68,10 @@ class Pipeline:
         self.gallery = Gallery(self.config.gallery)
         self.bodies = BodyDetector(self.config.body)
         self.tracker = Tracker(self.config.tracking, self.config.recognition)
+        body = self.config.body
+        self.appearance_bank = AppearanceBank(
+            threshold=body.reid_threshold, margin=body.reid_margin, memory=body.reid_memory,
+        )
         self.renderer = Renderer(self.config.draw, self.config.recognition)
 
         self._fps_window: Deque[float] = deque(maxlen=30)
@@ -81,6 +86,7 @@ class Pipeline:
         self._embeddings = 0
         self._skipped_embeddings = 0
         self._low_quality = 0
+        self._body_holds = 0
 
     # --------------------------------------------------------------- startup
     def prepare(self) -> "Pipeline":
@@ -192,7 +198,106 @@ class Pipeline:
             self._embeddings += 1
 
         detections = self._build_detections(frame, faces, names, scores)
-        return self.tracker.commit(detections, assignment, timestamp)
+        if self._reid_active:
+            self._apply_reid(frame, detections)
+        return self.tracker.commit(
+            detections, self._extend_assignment(detections, assignment), timestamp
+        )
+
+    # ------------------------------------------------------------------- reid
+    @property
+    def _reid_active(self) -> bool:
+        """ReID needs real person boxes, which only the YOLO backend provides."""
+        return self.config.body.reid and self.bodies.mode == "yolo"
+
+    def _apply_reid(self, frame: np.ndarray, detections: List[dict]) -> None:
+        """Carry names across the moments a face stops being readable.
+
+        Faces are the only thing that can *create* an identity: the bank only
+        ever learns from a body that a face has just vouched for. It then
+        covers the two ways a face stops answering:
+
+        1. the face is still detected but no longer recognisable - turned,
+           blurred, backlit - and came back ``Unknown``;
+        2. the face is gone entirely and only the person box remains.
+
+        The first is by far the more common, and is the one that makes a label
+        flicker off mid-shot while the person is plainly still standing there.
+        """
+        frame_index = self.tracker.frame_index
+        unknown = self.config.recognition.unknown_label
+
+        # Teach the bank from every body a face just vouched for.
+        claimed: List[str] = []
+        for detection in detections:
+            name = detection.get("name")
+            body_box = detection.get("body_box")
+            if name and name != unknown and body_box is not None:
+                self.appearance_bank.observe(frame, body_box, name, frame_index)
+                claimed.append(name)
+
+        # 1. Faces that are present but unreadable.
+        for detection in detections:
+            if detection.get("name") != unknown or detection.get("body_box") is None:
+                continue
+            name, score = self.appearance_bank.identify(
+                frame, detection["body_box"], frame_index, exclude=claimed
+            )
+            if name is None:
+                continue
+            detection["name"] = name
+            detection["similarity"] = score
+            detection["by_body"] = True
+            claimed.append(name)
+            self._body_holds += 1
+
+        # 2. Person boxes with no face attached at all.
+        detections.extend(self._nameless_bodies(frame, detections, claimed, frame_index))
+        self.appearance_bank.forget_stale(frame_index)
+
+    def _nameless_bodies(self, frame: np.ndarray, detections: List[dict],
+                         claimed: List[str], frame_index: int) -> List[dict]:
+        """Name person boxes that no detected face accounts for."""
+        bodies = self.bodies.detect(frame)
+        if not bodies:
+            return []
+
+        taken: set = set()
+        for detection in detections:
+            index, _ = self.bodies.match(detection["box"], bodies, used=taken)
+            if index is not None:
+                taken.add(index)
+
+        extra: List[dict] = []
+        for index, body in enumerate(bodies):
+            if index in taken:
+                continue
+            name, score = self.appearance_bank.identify(
+                frame, body.box, frame_index, exclude=claimed
+            )
+            if name is None:
+                continue
+            claimed.append(name)
+            self._body_holds += 1
+            # The "face" box for a bodiless person is the head end of the body,
+            # so the label lands where a face box would have been.
+            x1, y1, x2, y2 = body.box
+            head_height = max(8, int((y2 - y1) * 0.18))
+            extra.append({
+                "box": (x1, y1, x2, y1 + head_height),
+                "score": body.score,
+                "landmarks": None,
+                "body_box": body.box,
+                "name": name,
+                "similarity": score,
+                "by_body": True,
+            })
+        return extra
+
+    @staticmethod
+    def _extend_assignment(detections: List[dict], assignment: List) -> List:
+        """Pad the association so the body-only detections start their own tracks."""
+        return list(assignment) + [None] * (len(detections) - len(assignment))
 
     def _too_poor_to_judge(self, frame: np.ndarray, face) -> bool:
         """True when a face is too degraded for its embedding to mean anything."""
@@ -285,6 +390,7 @@ class Pipeline:
 
         runtime = self.config.runtime
         self.tracker.reset()
+        self.appearance_bank.clear()
         self._fps_window.clear()
 
         with FrameSource(spec, realtime=runtime.realtime) as source:
@@ -389,6 +495,12 @@ class Pipeline:
             lines.append(
                 f"Quality gate: {self._low_quality} face(s) were too small, soft or "
                 "turned away to identify, and were left Unknown."
+            )
+            lines.append("")
+        if self._body_holds:
+            lines.append(
+                f"Body ReID: {self._body_holds} frame(s) where somebody kept their name "
+                "from their clothing after their face went out of view."
             )
             lines.append("")
         total = self._embeddings + self._skipped_embeddings

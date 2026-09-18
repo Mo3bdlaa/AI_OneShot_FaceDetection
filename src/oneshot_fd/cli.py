@@ -126,6 +126,14 @@ def build_parser() -> argparse.ArgumentParser:
                             help="auto uses YOLO when installed, else a geometric estimate")
     body_group.add_argument("--yolo-model", default="yolov8n.pt",
                             help="ultralytics weights for the YOLO backend")
+    body_group.add_argument("--reid", action="store_true",
+                            help="keep a person labelled from their clothing once their "
+                                 "face is no longer visible (requires --body yolo)")
+    body_group.add_argument("--reid-threshold", type=float, default=0.72, metavar="F",
+                            help="appearance similarity a face-less body needs (default: 0.72)")
+    body_group.add_argument("--reid-memory", type=int, default=150, metavar="N",
+                            help="frames an appearance stays usable after its last face "
+                                 "confirmation (default: 150)")
     body_group.add_argument("--body-conf", type=float, default=0.35, metavar="F",
                             help="minimum confidence for a YOLO person box (default: 0.35)")
 
@@ -181,7 +189,9 @@ def config_from_args(args: argparse.Namespace) -> AppConfig:
             unknown_label=args.unknown_label,
         ),
         tracking=TrackingConfig(enabled=args.tracking),
-        body=BodyConfig(mode=args.body, yolo_model=args.yolo_model, conf=args.body_conf),
+        body=BodyConfig(mode=args.body, yolo_model=args.yolo_model, conf=args.body_conf,
+                        reid=args.reid, reid_threshold=args.reid_threshold,
+                        reid_memory=args.reid_memory),
         draw=DrawConfig(
             show_face=args.face_box,
             show_body=args.body_box,

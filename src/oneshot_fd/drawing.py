@@ -106,7 +106,7 @@ class Renderer:
                 draw_corner_box(canvas, track.body_box, color,
                                 max(1, config.box_thickness))
 
-            if config.show_face:
+            if config.show_face and not track.by_body:
                 x1, y1, x2, y2 = (int(v) for v in track.box)
                 cv2.rectangle(canvas, (x1, y1), (x2, y2), color, config.box_thickness,
                               cv2.LINE_AA)
@@ -121,6 +121,9 @@ class Renderer:
             elif config.show_score and is_unknown and track.label_score > 0:
                 label = f"{label} ({track.label_score:.2f})"
             label = f"#{track.track_id} {label}"
+            if track.by_body:
+                # A tilde says "this is their coat, not their face".
+                label = f"{label} ~body"
             if config.show_attributes:
                 years = track.estimated_age
                 attributes = " ".join(

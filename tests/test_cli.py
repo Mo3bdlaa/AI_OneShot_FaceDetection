@@ -94,3 +94,11 @@ def test_reverify_flag():
     assert parse("--reverify-every", "5").recognition.reverify_every == 5
     assert parse().recognition.reverify_every == 0, "verify every face by default"
     assert parse("--reverify-every", "-2").recognition.reverify_every == 0
+
+
+def test_reid_flags():
+    config = parse("--reid", "--reid-threshold", "0.8", "--reid-memory", "300")
+    assert config.body.reid is True
+    assert config.body.reid_threshold == 0.8
+    assert config.body.reid_memory == 300
+    assert parse().body.reid is False

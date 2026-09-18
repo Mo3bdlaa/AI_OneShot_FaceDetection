@@ -47,6 +47,8 @@ class Track:
     best_score: float = 0.0
 
     velocity: Tuple[float, float] = (0.0, 0.0)
+    #: True while this track is being held by clothing rather than by a face.
+    by_body: bool = False
     #: Frame index of the last vote that came from a real face embedding.
     verified_at: int = 0
     first_frame: int = 0
@@ -272,6 +274,7 @@ class Tracker:
             track.body_box = detection["body_box"]
         if detection.get("landmarks") is not None:
             track.landmarks = detection["landmarks"]
+        track.by_body = bool(detection.get("by_body", False))
         if detection.get("age") is not None:
             track.age_votes.append(int(detection["age"]))
         if detection.get("gender") is not None:
@@ -296,6 +299,7 @@ class Tracker:
             first_time=timestamp,
             last_time=timestamp,
         )
+        track.by_body = bool(detection.get("by_body", False))
         track.votes = deque(maxlen=max(1, self.recognition.vote_window))
         self._next_id += 1
         if detection.get("name") is not None:
