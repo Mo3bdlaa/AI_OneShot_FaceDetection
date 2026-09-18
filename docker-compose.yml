@@ -14,6 +14,12 @@ services:
       # Keep the downloaded models across rebuilds.
       - models:/models
     restart: unless-stopped
+    environment:
+      # A container always binds 0.0.0.0 - that is what makes the published
+      # port work - so it always asks for a token. Set one here and the URL is
+      # predictable; leave it unset and a fresh one is printed to the logs on
+      # every start. Change this before putting it anywhere shared.
+      ONESHOT_TOKEN: "${ONESHOT_TOKEN:-change-me}"
     # Everything after the image name is passed to the CLI, so any flag from
     # `--help` works here.
     command:

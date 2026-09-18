@@ -90,3 +90,38 @@ def test_no_token_means_no_gate(tmp_path):
                        body=BodyConfig(mode="off"))
     with TestClient(create_app(config, token=None)) as client:
         assert client.get("/api/state").status_code == 200
+
+
+# ------------------------------------------------------------ the environment
+
+def test_the_environment_can_supply_the_token(monkeypatch):
+    """So a container can be told its token instead of printing a fresh one."""
+    from oneshot_fd.web.auth import TOKEN_ENV
+
+    monkeypatch.setenv(TOKEN_ENV, "from-the-environment")
+    assert resolve_token(None, "0.0.0.0") == "from-the-environment"
+    assert resolve_token(None, "127.0.0.1") == "from-the-environment"
+
+
+def test_the_command_line_beats_the_environment(monkeypatch):
+    from oneshot_fd.web.auth import TOKEN_ENV
+
+    monkeypatch.setenv(TOKEN_ENV, "from-the-environment")
+    assert resolve_token("explicit", "0.0.0.0") == "explicit"
+
+
+def test_a_blank_environment_variable_is_ignored(monkeypatch):
+    from oneshot_fd.web.auth import TOKEN_ENV
+
+    monkeypatch.setenv(TOKEN_ENV, "   ")
+    assert resolve_token(None, "127.0.0.1") is None
+
+
+def test_the_generated_warning_formats_without_blowing_up(caplog):
+    """A logging call with the wrong number of arguments only fails when logged."""
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="oneshot_fd"):
+        token = resolve_token(None, "0.0.0.0")
+    assert token in caplog.text
+    assert "ONESHOT_TOKEN" in caplog.text

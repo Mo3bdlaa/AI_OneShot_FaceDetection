@@ -54,6 +54,10 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
     CMD python -c "import urllib.request; \
 urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4)"
 
+# A container has to bind 0.0.0.0 for the published port to reach it, which
+# means the token gate is always on. Set ONESHOT_TOKEN to choose it; otherwise
+# one is generated and printed at startup. `--no-token` turns it off entirely.
+#
 # 0.0.0.0 so the port mapping actually reaches it from outside the container.
 ENTRYPOINT ["python", "-m", "oneshot_fd"]
 CMD ["--serve", "--host", "0.0.0.0", "--port", "8000", \

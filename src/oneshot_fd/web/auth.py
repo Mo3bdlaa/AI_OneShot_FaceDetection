@@ -14,10 +14,15 @@ secret for a tool on your own network, not an authentication system.
 from __future__ import annotations
 
 import hmac
+import os
 import secrets
 from typing import Optional
 
 from ..utils import LOGGER
+
+#: Read when no token is passed on the command line. Containers set this so
+#: `docker compose up` is predictable instead of printing a fresh secret.
+TOKEN_ENV = "ONESHOT_TOKEN"
 
 #: Paths that stay open, so a container health check needs no credentials.
 PUBLIC_PATHS = frozenset({"/api/health", "/favicon.ico"})
@@ -33,14 +38,19 @@ def resolve_token(token: Optional[str], host: str) -> Optional[str]:
     """
     if token:
         return token
+    from_env = os.environ.get(TOKEN_ENV, "").strip()
+    if from_env:
+        LOGGER.info("Using the token from $%s.", TOKEN_ENV)
+        return from_env
     if host in LOCAL_HOSTS:
         return None
     generated = secrets.token_urlsafe(12)
     LOGGER.warning(
         "Serving on %s, which other machines can reach, so access needs a token.\n"
         "        Open:  http://<this-machine>:<port>/?token=%s\n"
-        "        Pass --token to choose your own, or --no-token to turn this off.",
-        host, generated,
+        "        Pass --token or set $%s to choose your own, "
+        "or --no-token to turn this off.",
+        host, generated, TOKEN_ENV,
     )
     return generated
 

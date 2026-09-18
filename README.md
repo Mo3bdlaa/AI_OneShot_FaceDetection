@@ -108,9 +108,9 @@ printed if you did not choose your own:
 ```
 
 Open that link once and the browser remembers it. Scripts send it as
-`X-Token:` or `?token=`. Use `--token` to choose your own, or `--no-token` if
-something in front is already doing the gatekeeping. `/api/health` stays open
-so container health checks keep working.
+`X-Token:` or `?token=`. Use `--token` or `$ONESHOT_TOKEN` to choose your own,
+or `--no-token` if something in front is already doing the gatekeeping.
+`/api/health` stays open so container health checks keep working.
 
 ![the web UI](docs/ui.png)
 
@@ -151,10 +151,16 @@ curl -O localhost:8000/api/appearances.csv          # who was seen, when
 docker compose up
 ```
 
-Put your photos in `./input_faces` and open <http://localhost:8000>. The models
-are baked into the image during the build, so the container starts ready and
-needs no network at run time. Any CLI flag works as a `command:` entry in
-`docker-compose.yml`.
+Put your photos in `./input_faces` and open
+<http://localhost:8000/?token=change-me>. The models are baked into the image
+during the build, so the container starts ready and needs no network at run
+time. Any CLI flag works as a `command:` entry in `docker-compose.yml`.
+
+A container always binds `0.0.0.0` — that is what makes the published port
+work — so the token gate is always on there. `docker-compose.yml` sets
+`ONESHOT_TOKEN` so the URL is predictable; **change it before running this
+anywhere shared.** Without it, a fresh token is printed to the logs at every
+start.
 
 ## Run it from the command line
 
