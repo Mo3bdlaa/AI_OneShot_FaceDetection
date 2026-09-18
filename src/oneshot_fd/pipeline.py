@@ -204,7 +204,7 @@ class Pipeline:
 
         detections = self._build_detections(frame, faces, names, scores)
         if self._reid_active:
-            self._apply_reid(frame, detections)
+            self._apply_reid(frame, detections, assignment)
         return self.tracker.commit(
             detections, self._extend_assignment(detections, assignment), timestamp
         )
@@ -215,89 +215,61 @@ class Pipeline:
         """ReID needs real person boxes, which only the YOLO backend provides."""
         return self.config.body.reid and self.bodies.mode == "yolo"
 
-    def _apply_reid(self, frame: np.ndarray, detections: List[dict]) -> None:
-        """Carry names across the moments a face stops being readable.
+    def _apply_reid(self, frame: np.ndarray, detections: List[dict],
+                    assignment: Sequence[Optional[int]]) -> None:
+        """Carry a name across the moments a face stops being readable.
 
-        Faces are the only thing that can *create* an identity: the bank only
-        ever learns from a body that a face has just vouched for. It then
-        covers the two ways a face stops answering:
+        Faces are the only thing that can create an identity here, and the
+        tracker is the only thing that decides which body is whose. Clothing
+        does one job: confirming that a track whose face just became
+        unreadable is still on the same body it was a moment ago.
 
-        1. the face is still detected but no longer recognisable - turned,
-           blurred, backlit - and came back ``Unknown``;
-        2. the face is gone entirely and only the person box remains.
-
-        The first is by far the more common, and is the one that makes a label
-        flicker off mid-shot while the person is plainly still standing there.
+        It deliberately does *not* search the remembered appearances for who a
+        body might be. Measured on six real people, two different ones reach
+        0.81 while the same person under a shifted light falls to 0.29 - there
+        is no threshold in there. Constrained to "still the same body, moments
+        later, before the light could change", the same measurement gives 0.97
+        against that 0.81, which is answerable.
         """
         frame_index = self.tracker.frame_index
         unknown = self.config.recognition.unknown_label
 
         # Teach the bank from every body a face just vouched for.
-        claimed: List[str] = []
         for detection in detections:
             name = detection.get("name")
             body_box = detection.get("body_box")
             if name and name != unknown and body_box is not None:
                 self.appearance_bank.observe(frame, body_box, name, frame_index)
-                claimed.append(name)
 
-        # 1. Faces that are present but unreadable.
-        for detection in detections:
+        # A face that is present but no longer recognisable keeps the name its
+        # own track already earned - if the body agrees it is still them.
+        for position, detection in enumerate(detections):
             if detection.get("name") != unknown or detection.get("body_box") is None:
                 continue
-            name, score = self.appearance_bank.identify(
-                frame, detection["body_box"], frame_index, exclude=claimed
-            )
-            if name is None:
+            track = self._track_for(assignment, position)
+            if track is None or track.label == unknown:
                 continue
-            detection["name"] = name
+            held, score = self.appearance_bank.confirms(
+                frame, detection["body_box"], track.label, frame_index
+            )
+            if not held:
+                continue
+            detection["name"] = track.label
             detection["similarity"] = score
             detection["by_body"] = True
-            claimed.append(name)
             self._body_holds += 1
 
-        # 2. Person boxes with no face attached at all.
-        detections.extend(self._nameless_bodies(frame, detections, claimed, frame_index))
         self.appearance_bank.forget_stale(frame_index)
 
-    def _nameless_bodies(self, frame: np.ndarray, detections: List[dict],
-                         claimed: List[str], frame_index: int) -> List[dict]:
-        """Name person boxes that no detected face accounts for."""
-        bodies = self.bodies.detect(frame)
-        if not bodies:
-            return []
+    def _track_for(self, assignment: Sequence[Optional[int]], position: int):
+        """The existing track a detection was matched to, if any."""
+        if position >= len(assignment):
+            return None
+        index = assignment[position]
+        if index is None or not 0 <= index < len(self.tracker.tracks):
+            return None
+        return self.tracker.tracks[index]
 
-        taken: set = set()
-        for detection in detections:
-            index, _ = self.bodies.match(detection["box"], bodies, used=taken)
-            if index is not None:
-                taken.add(index)
-
-        extra: List[dict] = []
-        for index, body in enumerate(bodies):
-            if index in taken:
-                continue
-            name, score = self.appearance_bank.identify(
-                frame, body.box, frame_index, exclude=claimed
-            )
-            if name is None:
-                continue
-            claimed.append(name)
-            self._body_holds += 1
-            # The "face" box for a bodiless person is the head end of the body,
-            # so the label lands where a face box would have been.
-            x1, y1, x2, y2 = body.box
-            head_height = max(8, int((y2 - y1) * 0.18))
-            extra.append({
-                "box": (x1, y1, x2, y1 + head_height),
-                "score": body.score,
-                "landmarks": None,
-                "body_box": body.box,
-                "name": name,
-                "similarity": score,
-                "by_body": True,
-            })
-        return extra
 
     @staticmethod
     def _extend_assignment(detections: List[dict], assignment: List) -> List:

@@ -110,11 +110,13 @@ class BodyConfig:
     #: visible. Needs real person boxes, so it only works with the YOLO backend.
     reid: bool = False
     #: Appearance similarity a face-less body must reach to keep a name.
-    reid_threshold: float = 0.72
+    #: Above the measured 0.81 ceiling for two different people.
+    reid_threshold: float = 0.85
     #: ... and how far it must beat the runner-up.
     reid_margin: float = 0.05
     #: Frames an appearance stays usable after its last face confirmation.
-    reid_memory: int = 150
+    #: Short on purpose: the descriptor only holds up while the light does.
+    reid_memory: int = 50
     #: Body boxes are estimated as this many face heights tall.
     estimate_height_factor: float = 7.5
     #: ... and this many face widths wide.

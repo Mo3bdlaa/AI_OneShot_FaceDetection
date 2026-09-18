@@ -162,11 +162,13 @@ def build_parser() -> argparse.ArgumentParser:
     body_group.add_argument("--reid", action="store_true",
                             help="keep a person labelled from their clothing once their "
                                  "face is no longer visible (requires --body yolo)")
-    body_group.add_argument("--reid-threshold", type=float, default=0.72, metavar="F",
-                            help="appearance similarity a face-less body needs (default: 0.72)")
-    body_group.add_argument("--reid-memory", type=int, default=150, metavar="N",
+    body_group.add_argument("--reid-threshold", type=float, default=0.85, metavar="F",
+                            help="appearance similarity a face-less body needs. 0.85 is "
+                                 "above the measured 0.81 that two different people can "
+                                 "reach (default: 0.85)")
+    body_group.add_argument("--reid-memory", type=int, default=50, metavar="N",
                             help="frames an appearance stays usable after its last face "
-                                 "confirmation (default: 150)")
+                                 "confirmation; short on purpose (default: 50)")
     body_group.add_argument("--body-conf", type=float, default=0.35, metavar="F",
                             help="minimum confidence for a YOLO person box (default: 0.35)")
 

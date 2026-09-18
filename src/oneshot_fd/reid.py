@@ -1,20 +1,36 @@
-"""Holding on to a person after their face is gone.
+"""Holding a name on somebody for the seconds their face is unreadable.
 
-Face recognition stops the moment someone turns around, walks behind a pillar
-or dips out of frame. The body is still right there, so this module remembers
-what each recognised person *looks like* from the shoulders down and uses that
-to keep the label on them.
+Face recognition stops the moment someone turns around, is backlit, or steps
+behind a pillar. The body is still right there, so this remembers what each
+recognised person looks like from the shoulders down and carries their label
+across the gap.
 
-The descriptor is a colour histogram of the torso, split into an upper and a
-lower band, in HSV with the value channel coarsely binned. That choice is
-deliberate: it needs no extra model, costs well under a millisecond, survives
-the person turning around (clothing looks much the same from behind), and
-degrades honestly - two people in the same uniform will not be told apart, and
-the code says so rather than pretending otherwise.
+**It carries an existing label; it does not identify anybody.** That
+distinction is the whole design, and it comes from measurement. On six real
+people in one photograph, the torso descriptor gave:
+
+===================================== ==============
+different people, same frame          0.34 - 0.81
+the same person, the box jittered     0.97 - 0.98
+the same person, lighting shifted     0.29 - 0.87
+===================================== ==============
+
+The first and third ranges overlap almost completely: no threshold separates
+"same person under a different light" from "different person". Hue-only,
+finer bins and histogram equalisation were all tried and all left the ranges
+overlapping. A colour histogram simply cannot answer "who is this?".
+
+What it answers cleanly is "is this the same body as a moment ago?", where the
+lighting has not had time to change: 0.97 against a worst case of 0.81. So the
+comparison is only ever against *that track's own* last face-confirmed
+appearance, within a few seconds, at a threshold well above the cross-person
+range. If the light does change, the similarity collapses and the label drops
+to Unknown - which is the safe direction to fail in.
 
 What it is not: a person re-identification network. It will not recognise
-someone across two cameras, or tomorrow, or after they take their jacket off.
-It bridges seconds, not scenes.
+someone on another camera, or tomorrow, or after they take their jacket off,
+and it will not tell apart two people dressed alike. It bridges seconds, not
+scenes.
 """
 
 from __future__ import annotations
@@ -112,14 +128,18 @@ class AppearanceBank:
     that have no face attached to them.
     """
 
-    def __init__(self, threshold: float = 0.72, margin: float = 0.05,
-                 memory: int = 150) -> None:
-        #: Appearance similarity a bodiless person box must reach to be named.
+    def __init__(self, threshold: float = 0.85, margin: float = 0.05,
+                 memory: int = 50) -> None:
+        #: How alike a body must be to the remembered one to keep its name.
+        #: 0.85 sits above the measured cross-person ceiling of 0.81 and well
+        #: below the 0.97 the same body scores moments later.
         self.threshold = threshold
         #: ... and how far it must beat the runner-up, so two similarly dressed
         #: people are left alone rather than swapped.
         self.margin = margin
         #: Frames an appearance stays usable after its last face confirmation.
+        #: Deliberately short - about two seconds - because the guarantee this
+        #: rests on is that the lighting has not had time to change.
         self.memory = memory
         self.entries: Dict[str, KnownAppearance] = {}
 
@@ -142,9 +162,34 @@ class AppearanceBank:
         else:
             entry.blend(vector, frame_index)
 
+    def confirms(self, frame: np.ndarray, box: Sequence[int], name: str,
+                 frame_index: int) -> Tuple[bool, float]:
+        """Is this still the body that was confirmed as ``name`` a moment ago?
+
+        A yes/no about one named person, never a search for who a body might
+        be. The measurements in this module's docstring are why: asking "who
+        does this coat look like?" cannot be answered safely, because two
+        different people reach 0.81 while the same person under a changed light
+        falls to 0.29. Asking "is this the same body as a moment ago, before
+        the light could change?" is answerable - 0.97 against that same 0.81.
+        """
+        entry = self.entries.get(name)
+        if entry is None or frame_index - entry.updated_at > self.memory:
+            return False, 0.0
+        vector = describe(frame, box)
+        if vector is None:
+            return False, 0.0
+        score = similarity(vector, entry.vector)
+        return score >= self.threshold, score
+
     def identify(self, frame: np.ndarray, box: Sequence[int],
                  frame_index: int, exclude: Sequence[str] = ()) -> Tuple[Optional[str], float]:
         """Guess who a face-less body belongs to.
+
+        Kept for callers that genuinely want a search, and used by nothing in
+        the pipeline: see :meth:`confirms` for why an open lookup is unsafe.
+        Two people dressed alike will be resolved to whichever was enrolled,
+        with no way to tell that has happened.
 
         ``exclude`` lists names already claimed by a visible face this frame -
         one person cannot be in two places, and skipping them stops a body

@@ -491,6 +491,7 @@ models / speed
 body / overlay
       --body MODE        auto | yolo | estimate | off
       --reid             hold a name on the body when the face is unreadable
+      --reid-threshold F similarity the body must reach (default 0.85)
       --blur-unknown     pixelate faces that are not in the gallery
       --landmarks        draw the five facial keypoints
       --mirror           mirror the frame (natural for a webcam)
