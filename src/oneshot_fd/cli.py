@@ -33,8 +33,8 @@ examples:
   # the browser UI, at http://localhost:8000
   python -m oneshot_fd --serve
 
-  # ... reachable from your phone on the same network
-  python -m oneshot_fd --serve --host 0.0.0.0
+  # ... reachable from your phone, using the phone's own camera
+  python -m oneshot_fd --serve --host 0.0.0.0 --https
 
   # just check the gallery loads
   python -m oneshot_fd --faces input_faces --list-people
@@ -85,6 +85,10 @@ def build_parser() -> argparse.ArgumentParser:
     web_group.add_argument("--token", default=None, metavar="SECRET",
                            help="require this token on every request. One is generated "
                                 "when serving on a reachable address and none is given")
+    web_group.add_argument("--https", action="store_true",
+                           help="serve over HTTPS with a self-signed certificate. "
+                                "Browsers only share a camera on a secure origin, so "
+                                "this is what lets a phone use its own camera")
     web_group.add_argument("--no-token", dest="require_token", action="store_false",
                            help="serve with no token even on a reachable address; only "
                                 "sensible behind something else that authenticates")
@@ -253,7 +257,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             from .web import serve
 
             serve(config, host=args.host, port=args.port,
-                  token=args.token, require_token=args.require_token)
+                  token=args.token, require_token=args.require_token,
+                  https=args.https)
             return 0
         return run_app(config)
     except KeyboardInterrupt:

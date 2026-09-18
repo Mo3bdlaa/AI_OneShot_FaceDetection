@@ -13,6 +13,9 @@ models/
 *.onnx
 *.pt
 .insightface/
+.oneshot_work/
+server.crt
+server.key
 
 # Data
 input_faces/**

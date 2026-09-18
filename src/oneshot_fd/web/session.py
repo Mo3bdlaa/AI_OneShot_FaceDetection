@@ -68,6 +68,10 @@ class Session:
         self.fps = 0.0
         self.started_at = 0.0
 
+        #: True while the browser is posting frames rather than the server
+        #: pulling them from a camera or file.
+        self._pushed = False
+
         self.events: Deque[Event] = deque(maxlen=400)
         self._on_screen: Dict[str, float] = {}
         self._seen_names: set = set()
@@ -90,6 +94,7 @@ class Session:
                 "gallery": self._gallery_json(),
                 "settings": self._settings_json(),
                 "recording": self.recording_path.name if self.recording_path else None,
+                "pushed": self._pushed,
                 "has_results": bool(self.pipeline and self.pipeline.current_appearances()),
             }
 
@@ -191,6 +196,62 @@ class Session:
                 self._jpeg = buffer.tobytes()
 
     # ----------------------------------------------------------------- control
+    # ------------------------------------------------- frames from a browser
+    def begin_pushed(self, label: str = "browser camera") -> None:
+        """Start a session fed one frame at a time by the client.
+
+        Nothing is pulled here: the browser grabs from its own camera and posts
+        each frame, so there is no worker thread and no source to open. The
+        rest - the tracker, the roster, the event log - is the same, so the
+        page behaves identically whichever camera is in use.
+        """
+        if self.is_running:
+            raise RuntimeError("A session is already running. Stop it first.")
+
+        self.ensure_pipeline().reset_results()
+        self.source = label
+        self.recording_path = None
+        self.status = "running"
+        self.message = ""
+        self.events.clear()
+        self._on_screen.clear()
+        self._seen_names.clear()
+        self._frame_number = 0
+        self._pushed = True
+        self._stop.clear()
+        self.started_at = time.time()
+        self._note("info", "", 0.0, f"Started on the {label}")
+
+    def push_frame(self, jpeg: bytes) -> Optional[bytes]:
+        """Recognise one pushed frame and give back the annotated JPEG."""
+        if not self._pushed:
+            raise RuntimeError("No pushed session is running. Start one first.")
+
+        buffer = np.frombuffer(jpeg, dtype=np.uint8)
+        frame = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
+        if frame is None:
+            raise ValueError("That is not a readable image.")
+
+        index = self._frame_number + 1
+        result = self.ensure_pipeline().process_frame(
+            frame, index, time.time() - self.started_at
+        )
+        self._publish(result.frame, index, result.fps)
+        self._track_names(result)
+        return self.latest_jpeg()
+
+    def end_pushed(self) -> None:
+        if not self._pushed:
+            return
+        self._pushed = False
+        self._stop.set()
+        self.status = "stopped"
+        self._note("info", "", 0.0, "Camera stopped")
+
+    @property
+    def is_pushed(self) -> bool:
+        return self._pushed
+
     def start(self, source: str, record_to: Optional[Path] = None) -> None:
         """Begin processing ``source`` on a worker thread.
 
@@ -219,6 +280,9 @@ class Session:
         self._thread.start()
 
     def stop(self, timeout: float = 5.0) -> None:
+        if self._pushed:
+            self.end_pushed()
+            return
         self._stop.set()
         thread = self._thread
         if thread is not None and thread.is_alive():
@@ -229,6 +293,8 @@ class Session:
 
     @property
     def is_running(self) -> bool:
+        if self._pushed:
+            return True
         return self._thread is not None and self._thread.is_alive()
 
     def ensure_pipeline(self) -> Pipeline:

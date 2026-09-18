@@ -171,6 +171,7 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; paddi
           </div>
           <div style="flex:0 0 auto; align-self:flex-end" class="row tight">
             <button class="primary" id="startBtn">Start</button>
+            <button id="camBtn" title="Use the camera on this device">This device's camera</button>
             <button class="danger" id="stopBtn" disabled>Stop</button>
           </div>
         </div>
@@ -260,6 +261,9 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; paddi
     </div>
   </div>
 </main>
+
+<video id="camFeed" playsinline muted hidden></video>
+<canvas id="camCanvas" hidden></canvas>
 
 <div id="toast"></div>
 
@@ -470,6 +474,113 @@ $('reverify').oninput = e => {
 ['show_face', 'show_body', 'show_attributes', 'blur_unknown']
   .forEach(id => ($(id).onchange = pushSettings));
 
+// ------------------------------------------------- the camera on this device
+//
+// The server can only open a camera attached to the server. To use the camera
+// in your hand, the browser grabs the frames and posts them here instead. It
+// is paced by the round trip - a new frame goes only once the last one comes
+// back - so a slow machine falls behind in frame rate rather than in latency.
+let camStream = null, camRunning = false;
+
+function cameraIsAvailable() {
+  return Boolean(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+}
+
+async function startDeviceCamera() {
+  if (!cameraIsAvailable()) {
+    toast('This browser will not share a camera over plain http. ' +
+          'Use localhost, or start the server with --https.', true);
+    return;
+  }
+  try {
+    camStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false,
+    });
+  } catch (error) {
+    toast('The camera was refused: ' + error.message, true);
+    return;
+  }
+
+  const feed = $('camFeed');
+  feed.srcObject = camStream;
+  await feed.play();
+
+  try {
+    await api('/api/camera/start', { method: 'POST' });
+  } catch (error) {
+    toast(error.message, true);
+    stopDeviceCamera();
+    return;
+  }
+
+  camRunning = true;
+  $('video').style.display = 'block';
+  $('placeholder').style.display = 'none';
+  $('log').innerHTML = '';
+  lastEvent = 0;
+  pumpCameraFrames();
+}
+
+async function pumpCameraFrames() {
+  const feed = $('camFeed');
+  const canvas = $('camCanvas');
+  const context = canvas.getContext('2d');
+
+  while (camRunning) {
+    if (!feed.videoWidth) { await new Promise(r => setTimeout(r, 100)); continue; }
+    canvas.width = feed.videoWidth;
+    canvas.height = feed.videoHeight;
+    context.drawImage(feed, 0, 0, canvas.width, canvas.height);
+
+    const blob = await new Promise(resolve =>
+      canvas.toBlob(resolve, 'image/jpeg', 0.8));
+    if (!blob) break;
+
+    try {
+      const headers = { 'Content-Type': 'image/jpeg' };
+      if (TOKEN) headers['X-Token'] = TOKEN;
+      const response = await fetch('/api/camera/frame', {
+        method: 'POST', headers, body: blob,
+      });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
+        throw new Error(detail.detail || response.statusText);
+      }
+      const annotated = await response.blob();
+      const url = URL.createObjectURL(annotated);
+      const previous = $('video').src;
+      $('video').src = url;
+      if (previous.startsWith('blob:')) URL.revokeObjectURL(previous);
+    } catch (error) {
+      if (camRunning) toast(error.message, true);
+      break;
+    }
+  }
+  stopDeviceCamera();
+}
+
+function stopDeviceCamera() {
+  camRunning = false;
+  if (camStream) {
+    camStream.getTracks().forEach(track => track.stop());
+    camStream = null;
+  }
+  $('camFeed').srcObject = null;
+
+  // Revoking the blob while the <img> still points at it makes the browser go
+  // looking for a URL that no longer exists, so drop the reference first.
+  const current = $('video').src;
+  $('video').removeAttribute('src');
+  $('video').style.display = 'none';
+  $('placeholder').style.display = 'block';
+  if (current.startsWith('blob:')) URL.revokeObjectURL(current);
+
+  api('/api/stop', { method: 'POST' }).catch(() => {});
+}
+
+$('camBtn').onclick = () => (camRunning ? stopDeviceCamera() : startDeviceCamera());
+
 // ------------------------------------------------------------------ session
 $('startBtn').onclick = async () => {
   const source = $('source').value.trim();
@@ -498,6 +609,7 @@ $('startBtn').onclick = async () => {
 };
 
 $('stopBtn').onclick = async () => {
+  if (camRunning) { stopDeviceCamera(); return; }
   try { await api('/api/stop', { method: 'POST' }); } catch (error) { toast(error.message, true); }
 };
 
@@ -553,6 +665,8 @@ async function poll() {
       : state.status;
     $('startBtn').disabled = running || state.status === 'starting';
     $('stopBtn').disabled = !running;
+    $('camBtn').disabled = running && !state.pushed;
+    $('camBtn').textContent = camRunning ? 'Stop the camera' : "This device's camera";
 
     if (state.status === 'error' && state.message) {
       $('hint').textContent = state.message;
@@ -604,6 +718,13 @@ function applyServerSettings(settings) {
     $('show_attributes').disabled = true;
     $('attributesHint').hidden = false;
   }
+}
+
+if (!cameraIsAvailable()) {
+  $('camBtn').disabled = true;
+  $('camBtn').title =
+    'Browsers only share a camera over https (or on localhost). ' +
+    'Start the server with --https to use this from another device.';
 }
 
 poll();

@@ -89,11 +89,32 @@ python run.py --serve                    # http://localhost:8000
 python run.py --serve --host 0.0.0.0     # ...also from your phone on the same network
 ```
 
-Drag reference photos in, drop a video on it or point it at a camera, watch the
-annotated result live, and move the threshold, quality gate and overlay
+Drag reference photos in, drop a video on it, point it at a camera — the
+server's, or the one in your hand — and watch the annotated result live, and move the threshold, quality gate and overlay
 switches while it runs. It shows who is on screen in the same colours the
 overlay draws, logs everyone as they come and go, and offers the annotated
 video and a CSV of appearances when the run finishes.
+
+### Using the camera in your hand
+
+`--source 0` opens a camera attached to *the server*. To use the camera on the
+device you are holding, press **This device's camera** — the browser grabs the
+frames and posts them to be recognised, so a phone's camera works as well as
+the server's.
+
+Browsers only hand out a camera on a secure origin, and `http://192.168.1.7:8000`
+is not one. That is what `--https` is for:
+
+```bash
+python run.py --serve --host 0.0.0.0 --https
+```
+
+It makes a self-signed certificate naming this machine's addresses, so the
+browser warns once and then lets the page through. Without HTTPS the camera
+button is disabled and says why, rather than failing silently when pressed.
+
+Pace is set by the round trip: the next frame goes only once the last one comes
+back, so a slow machine loses frame rate rather than drifting behind.
 
 ### Reaching it from another device
 
@@ -139,6 +160,8 @@ curl -O localhost:8000/api/appearances.csv          # who was seen, when
 | `POST /api/settings` | change thresholds and overlays while running |
 | `GET`/`POST`/`DELETE /api/gallery` | list, upload and remove reference photos |
 | `GET /api/calibrate` | the threshold the gallery itself suggests |
+| `POST /api/camera/start` | begin a session fed by the client's own camera |
+| `POST /api/camera/frame` | post one JPEG, get the annotated one back |
 | `POST /api/source` | upload a video and get back a path to start on |
 | `GET /api/appearances.csv` | who was seen, when and for how long |
 | `GET /api/recording.mp4` | the annotated video, if recording was on |
@@ -339,6 +362,7 @@ web interface
       --host ADDR        0.0.0.0 to reach it from other devices (127.0.0.1)
       --port N           default 8000
       --token SECRET     require this token; generated if the host is reachable
+      --https            self-signed TLS, so a phone can use its own camera
       --no-token         serve an exposed host with no token at all
 
 input / output

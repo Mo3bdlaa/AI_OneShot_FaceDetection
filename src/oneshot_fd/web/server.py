@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 try:
-    from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+    from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
     from fastapi.responses import HTMLResponse, Response, StreamingResponse
 except ImportError as _exc:  # pragma: no cover - depends on the install
     raise RuntimeError(
@@ -314,6 +314,37 @@ def create_app(config: Optional[AppConfig] = None, token: Optional[str] = None):
             ],
         }
 
+    # ------------------------------------------------- the client's own camera
+    @app.post("/api/camera/start")
+    def camera_start():
+        """Begin a session fed by the browser's camera instead of the server's."""
+        try:
+            session.begin_pushed()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        return {"started": True, "source": session.source}
+
+    @app.post("/api/camera/frame")
+    async def camera_frame(request: Request):
+        """Take one JPEG from the browser, hand back the annotated one.
+
+        The body is the raw image rather than a form, because this runs once
+        per frame and multipart framing is pure overhead at that rate.
+        """
+        body = await request.body()
+        if not body:
+            raise HTTPException(status_code=400, detail="No image in the request body.")
+        try:
+            annotated = session.push_frame(body)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        if annotated is None:
+            raise HTTPException(status_code=500, detail="Could not encode the result.")
+        return Response(content=annotated, media_type="image/jpeg",
+                        headers={"Cache-Control": "no-store"})
+
     # ----------------------------------------------------------- run a upload
     @app.post("/api/source")
     async def upload_source(file: UploadFile = File(...)):
@@ -435,7 +466,7 @@ def create_app(config: Optional[AppConfig] = None, token: Optional[str] = None):
 
 def serve(config: Optional[AppConfig] = None, host: str = "127.0.0.1",
           port: int = 8000, token: Optional[str] = None,
-          require_token: bool = True) -> None:
+          require_token: bool = True, https: bool = False) -> None:
     """Run the web UI with uvicorn.
 
     ``require_token=False`` serves an exposed host with no token at all, which
@@ -454,11 +485,39 @@ def serve(config: Optional[AppConfig] = None, host: str = "127.0.0.1",
         LOGGER.warning("Serving on %s with --no-token: anyone who can reach this "
                        "port can enrol people and start the camera.", host)
 
+    ssl_options = {}
+    scheme = "http"
+    if https:
+        from . import tls
+
+        pair = tls.ensure_certificate(_work_dir(config or AppConfig()) / "tls")
+        if pair:
+            ssl_options = {"ssl_certfile": str(pair[0]), "ssl_keyfile": str(pair[1])}
+            scheme = "https"
+        else:
+            LOGGER.warning("Carrying on without HTTPS. A browser will not share "
+                           "its camera with this page except on localhost.")
+
     app = create_app(config, token=resolved)
     shown = "localhost" if host in ("127.0.0.1", "0.0.0.0") else host
     suffix = f"/?token={resolved}" if resolved else ""
-    LOGGER.info("Web UI on http://%s:%d%s  (API docs at /api/docs)", shown, port, suffix)
+    LOGGER.info("Web UI on %s://%s:%d%s  (API docs at /api/docs)",
+                scheme, shown, port, suffix)
     if host == "0.0.0.0":
-        LOGGER.info("Listening on all interfaces - reachable from other devices "
-                    "on this network.")
-    uvicorn.run(app, host=host, port=port, log_level="warning")
+        addresses = ", ".join(f"{scheme}://{a}:{port}{suffix}"
+                              for a in _reachable_addresses())
+        LOGGER.info("Reachable from other devices at %s", addresses or "this network")
+        if scheme == "http":
+            LOGGER.info("Those devices can watch, but cannot share their own "
+                        "camera over plain http - add --https for that.")
+    uvicorn.run(app, host=host, port=port, log_level="warning", **ssl_options)
+
+
+def _reachable_addresses() -> list:
+    """Addresses worth printing, so the user does not have to go looking."""
+    try:
+        from .tls import local_addresses
+
+        return [a for a in local_addresses() if a != "127.0.0.1"]
+    except Exception:  # pragma: no cover - never worth failing a startup over
+        return []
