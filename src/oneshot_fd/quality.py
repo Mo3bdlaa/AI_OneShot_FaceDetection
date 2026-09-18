@@ -21,8 +21,14 @@ import numpy as np
 
 from .utils import clip_box
 
-#: Below this Laplacian variance a face crop is visibly soft.
-SHARPNESS_FLOOR = 60.0
+#: Sharpness is measured on a crop resized to this, so a 1500px studio
+#: portrait and a 100px face from a video frame are judged on the same terms.
+SHARPNESS_CROP = 112
+
+#: Below this, on that fixed-size crop, a face is genuinely mushy. Derived by
+#: measuring: ten real photos from a phone and a TV still scored 112-729, while
+#: a face blurred past recognition or shrunk to 40px scored 25-61.
+SHARPNESS_FLOOR = 80.0
 #: ArcFace is trained on 112px crops; smaller than this is guesswork.
 SIZE_FLOOR = 60
 #: Mean luma outside this range loses the detail embeddings rely on.
@@ -59,10 +65,24 @@ class FaceQuality:
 # behave: size, focus, exposure and the detector's own confidence.
 
 
-def sharpness_of(crop: np.ndarray) -> float:
-    """Variance of the Laplacian - the standard cheap focus measure."""
+def sharpness_of(crop: np.ndarray, size: int = SHARPNESS_CROP) -> float:
+    """How much fine detail a face crop carries, independent of its resolution.
+
+    Variance of the Laplacian is the standard cheap focus measure, but taken
+    raw it is not comparable between images: it counts detail *per pixel*, so a
+    large, smooth, retouched portrait scores lower than a small noisy selfie
+    that is objectively worse. Measured that way, two perfectly good photos out
+    of four were flagged as out of focus. Resizing to a fixed crop first makes
+    the numbers mean the same thing everywhere.
+
+    It is still fooled by heavy JPEG compression, whose blockiness reads as
+    detail - a quality-5 copy of a good photo scored higher than the original.
+    So this is a hint that a photo is soft, not a verdict on it.
+    """
     if crop.size == 0:
         return 0.0
+    if crop.shape[0] != size or crop.shape[1] != size:
+        crop = cv2.resize(crop, (size, size), interpolation=cv2.INTER_AREA)
     grey = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
     return float(cv2.Laplacian(grey, cv2.CV_64F).var())
 
@@ -89,7 +109,12 @@ def assess(frame: np.ndarray, box: Sequence[int], landmarks=None,
     if size < size_floor:
         issues.append(f"face is only {size}px across (want {int(size_floor)}px+)")
     if sharpness < sharp_floor:
-        issues.append(f"looks out of focus (sharpness {sharpness:.0f}, want {sharp_floor:.0f}+)")
+        # Worth saying, not worth alarm: ArcFace tolerates a great deal of
+        # blur. A face blurred until it is barely a face still matched itself
+        # at 0.88, so this is advice for a better photo rather than a
+        # prediction that this one will fail.
+        issues.append(f"is soft; a sharper photo would be better "
+                      f"(detail {sharpness:.0f}, typical is 150+)")
     if brightness < BRIGHTNESS_RANGE[0]:
         issues.append(f"too dark (brightness {brightness:.0f})")
     elif brightness > BRIGHTNESS_RANGE[1]:
@@ -100,7 +125,7 @@ def assess(frame: np.ndarray, box: Sequence[int], landmarks=None,
     # A single 0..1 number for sorting and for --min-quality.
     parts = [
         min(1.0, size / (SIZE_FLOOR * 2.0)),
-        min(1.0, sharpness / (SHARPNESS_FLOOR * 2.0)),
+        min(1.0, sharpness / (SHARPNESS_FLOOR * 2.5)),
         1.0 - min(1.0, abs(brightness - 128.0) / 128.0),
         min(1.0, detection_score),
     ]

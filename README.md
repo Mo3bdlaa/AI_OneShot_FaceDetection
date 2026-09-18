@@ -120,6 +120,13 @@ It is a measurement on your data, not a benchmark: six people is an easier
 problem than six hundred, so run it again after adding more. The same check is
 a button in the web UI.
 
+**It is also an easier test than reality.** It degrades *the photo you enrolled*,
+which scores around 0.96 even heavily blurred; a different photo of the same
+person on a different day scores 0.64–0.84. So a good self-check result means
+"nothing here is broken", not "these people are far apart". The number that
+proves that is a second photo of someone, taken another day, coming back with
+their name on it.
+
 ## Run it in a browser
 
 ```bash
@@ -303,16 +310,29 @@ Recognised people:
 |---|---|
 | Not sure what threshold to use | run `--list-people` and use the number it suggests |
 | Not sure it will work at all | run `--self-check` and read the per-person margins |
-| A known person shows up as `Unknown` | lower `--threshold` (try `0.32`), or add another photo of them |
+| A known person shows up as `Unknown` | lower `--threshold` (try `0.32`), or add another photo of them — a different day helps far more than a second photo from the same session |
 | A stranger gets confidently named | raise `--min-quality` to `0.45` so poor faces stay `Unknown` |
 | Two people get confused with each other | raise `--threshold` (try `0.45`) and `--margin` (try `0.08`) |
 | Small or distant faces are missed | raise `--det-size` to `960`, or lower `--det-threshold` to `0.35` |
 | The name flickers between frames | raise `--vote-window` (try `24`) |
 
-`--threshold` is a cosine similarity between ArcFace embeddings. Roughly:
-`> 0.6` the same photo, `0.4–0.6` clearly the same person, `0.3–0.4` probably
-the same person, `< 0.3` different people. The default of `0.38` is a
-deliberately cautious middle.
+`--threshold` is a cosine similarity between ArcFace embeddings. These are
+measured numbers, not rules of thumb — from four real photos of one person
+taken on different days with different cameras, enrolled from one of them:
+
+| | similarity |
+|---|---|
+| The same person, a different photo | **0.64 – 0.84** |
+| The nearest *other* person in the gallery | **0.02 – 0.07** |
+| The same photo, just blurred or resized | 0.94 – 0.99 |
+
+The gap between the first two rows is what the threshold sits in, and it is
+wide. The default of `0.38` is far below the worst same-person score and far
+above the best stranger score.
+
+That third row is worth knowing when you are testing: matching a photo against
+a **copy of itself** scores ~0.96 and proves almost nothing. A real check needs
+a different photo of the same person.
 
 ### Speed
 
@@ -372,11 +392,17 @@ the free path, or `--body off` for faces only.
 
 ### Reference photo quality
 
-Every enrolment photo is checked for the three things that actually break
-one-shot recognition — a face too small to carry detail, one out of focus, and
-one too dark or blown out — and the specific problem is reported rather than
-silently baked into the gallery. `--reject-below 0.4` refuses those photos
-outright instead of warning; `--no-quality-check` skips the inspection.
+Every enrolment photo is checked for a face too small to carry detail, one
+that is soft, and one too dark or blown out, and the specific problem is
+reported rather than silently baked into the gallery. `--reject-below 0.4`
+refuses those photos outright instead of warning; `--no-quality-check` skips
+the inspection.
+
+Treat the softness warning as advice, not a verdict. ArcFace tolerates a
+startling amount of blur — a face blurred until it is barely a face still
+matched itself at 0.88 — so a soft photo usually works, it just works less
+well than a sharp one would. The measure is also fooled by heavy JPEG
+compression, whose blockiness reads as detail.
 
 The same scoring runs on video with `--min-quality 0.45`: a face too degraded
 to judge is left `Unknown` instead of being confidently mislabelled.

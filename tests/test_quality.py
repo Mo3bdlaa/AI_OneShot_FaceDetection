@@ -28,6 +28,26 @@ def test_sharpness_drops_when_an_image_is_blurred():
     assert sharpness_of(sharp) > sharpness_of(soft) * 3
 
 
+def test_sharpness_does_not_depend_on_how_big_the_photo_is():
+    """The bug this replaced: a big smooth portrait read as 'out of focus'.
+
+    Measured per pixel, the same face at 1500px scores far lower than at
+    300px, because detail is spread thinner - so two perfectly good photos
+    out of four were flagged. Measuring on a fixed-size crop fixes that.
+    """
+    small = detailed_face(200)
+    large = cv2.resize(small, (1200, 1200), interpolation=cv2.INTER_CUBIC)
+
+    ratio = sharpness_of(large) / max(1e-6, sharpness_of(small))
+    assert 0.4 < ratio < 2.5, f"resolution still moves the number ({ratio:.2f}x)"
+
+
+def test_a_blurred_face_still_scores_below_a_sharp_one_at_any_size():
+    sharp = cv2.resize(detailed_face(200), (900, 900))
+    soft = cv2.GaussianBlur(sharp, (41, 41), 0)
+    assert sharpness_of(soft) < sharpness_of(sharp)
+
+
 def test_head_pose_is_deliberately_not_judged():
     """Two cheap pose estimates were measured and neither worked; see quality.py.
 
@@ -62,7 +82,17 @@ def test_a_blurred_face_is_flagged():
     frame = np.zeros((400, 400, 3), np.uint8)
     frame[100:300, 100:300] = detailed_face(200, blur=31)
     quality = assess(frame, (100, 100, 300, 300), STRAIGHT_ON + 100, 0.9, reference=True)
-    assert any("focus" in issue for issue in quality.issues), quality.describe()
+    assert any("soft" in issue for issue in quality.issues), quality.describe()
+
+
+def test_the_blur_warning_is_advice_not_a_verdict():
+    """A blurred face still recognises; the wording must not claim otherwise."""
+    frame = np.zeros((400, 400, 3), np.uint8)
+    frame[100:300, 100:300] = detailed_face(200, blur=31)
+    text = assess(frame, (100, 100, 300, 300), STRAIGHT_ON + 100, 0.9,
+                  reference=True).describe()
+    assert "would be better" in text
+    assert "fail" not in text and "unusable" not in text
 
 
 def test_a_dark_face_is_flagged():
