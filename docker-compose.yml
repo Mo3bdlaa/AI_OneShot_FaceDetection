@@ -1,0 +1,37 @@
+# docker compose up
+#
+# Your photos in ./input_faces, the UI on http://localhost:8000
+
+services:
+  oneshot-fd:
+    build: .
+    image: oneshot-fd
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./input_faces:/app/input_faces
+      - ./outputs:/app/outputs
+      # Keep the downloaded models across rebuilds.
+      - models:/models
+    restart: unless-stopped
+    # Everything after the image name is passed to the CLI, so any flag from
+    # `--help` works here.
+    command:
+      - --serve
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - --faces
+      - /app/input_faces
+      - --model-root
+      - /models
+      - --det-size
+      - "640"
+
+    # A webcam on the host, for `--source 0`. Linux only; uncomment to use.
+    # devices:
+    #   - /dev/video0:/dev/video0
+
+volumes:
+  models:

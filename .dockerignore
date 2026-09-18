@@ -1,0 +1,22 @@
+.git/
+.github/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# Data and models never belong in the image
+input_faces/*
+!input_faces/README.md
+outputs/
+models/
+*.onnx
+*.pt
+*.mp4
+*.avi
+*.mkv
+*.gallery.npz

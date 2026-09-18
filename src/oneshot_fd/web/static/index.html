@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>One-Shot Face Recognition</title>
+<link rel="icon" href="/favicon.ico">
+<style>
+:root {
+  --bg: #0e1116;       --panel: #171b22;   --panel-2: #1e242d;
+  --line: #2a323d;     --text: #e6edf3;    --muted: #9aa7b4;
+  --accent: #4da3ff;   --good: #3fb950;    --warn: #d29922;  --bad: #f85149;
+  --radius: 10px;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+header {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 12px 18px; background: var(--panel); border-bottom: 1px solid var(--line);
+  position: sticky; top: 0; z-index: 10;
+}
+header h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.running { background: var(--good); box-shadow: 0 0 0 4px rgba(63,185,80,.15); }
+.dot.error   { background: var(--bad); }
+.dot.starting{ background: var(--warn); }
+.spacer { flex: 1 1 auto; }
+.stat { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 13px; }
+#sourceLabel { max-width: 40ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+main {
+  display: grid; grid-template-columns: minmax(0,1fr) 340px; gap: 16px;
+  padding: 16px; max-width: 1500px; margin: 0 auto; align-items: start;
+}
+@media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+
+.card {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--radius); overflow: hidden;
+}
+.card > h2 {
+  margin: 0; padding: 11px 14px; font-size: 13px; font-weight: 600;
+  border-bottom: 1px solid var(--line); color: var(--muted);
+  text-transform: uppercase; letter-spacing: .07em;
+}
+.card > .body { padding: 14px; }
+.stack > * + * { margin-top: 16px; }
+
+#viewport {
+  position: relative; background: #000; aspect-ratio: 16/9;
+  display: flex; align-items: center; justify-content: center;
+}
+#video { width: 100%; height: 100%; object-fit: contain; display: none; }
+#placeholder { color: var(--muted); text-align: center; padding: 30px; font-size: 14px; }
+#placeholder code {
+  background: var(--panel-2); padding: 2px 6px; border-radius: 4px; color: var(--text);
+}
+
+label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+input[type=text], select {
+  width: 100%; padding: 8px 10px; background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--line); border-radius: 7px; font: inherit;
+}
+input[type=range] { width: 100%; accent-color: var(--accent); }
+button {
+  padding: 8px 14px; border-radius: 7px; border: 1px solid var(--line);
+  background: var(--panel-2); color: var(--text); font: inherit; cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #06121f; font-weight: 600; }
+button.danger  { background: transparent; border-color: var(--bad); color: var(--bad); }
+.row { display: flex; gap: 8px; flex-wrap: wrap; }
+.row > * { flex: 1 1 auto; }
+.row.tight > * { flex: 0 0 auto; }
+
+.switch { display: flex; align-items: center; gap: 9px; margin: 0; font-size: 13px; color: var(--text); }
+.switch input { accent-color: var(--accent); width: 15px; height: 15px; }
+
+.slider-row { display: flex; align-items: baseline; justify-content: space-between; }
+.slider-row b { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 13px; }
+
+#drop {
+  border: 1.5px dashed var(--line); border-radius: 9px; padding: 20px 14px;
+  text-align: center; color: var(--muted); cursor: pointer; transition: .15s;
+  font-size: 13px;
+}
+#drop.over, #drop:hover { border-color: var(--accent); color: var(--text); background: rgba(77,163,255,.06); }
+
+ul.list { list-style: none; margin: 0; padding: 0; }
+ul.list li {
+  display: flex; align-items: center; gap: 9px; padding: 7px 0;
+  border-bottom: 1px solid var(--line); font-size: 13px;
+}
+ul.list li:last-child { border-bottom: 0; }
+.chip { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+.name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meta { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.x { border: 0; background: none; color: var(--muted); cursor: pointer; padding: 2px 5px; font-size: 15px; }
+.x:hover { color: var(--bad); }
+.warn { color: var(--warn); font-size: 12px; padding: 2px 0 6px 18px; }
+
+#log { max-height: 210px; overflow-y: auto; font-size: 12.5px; }
+#log div { padding: 3px 0; border-bottom: 1px solid rgba(42,50,61,.5); display: flex; gap: 8px; }
+#log div:last-child { border-bottom: 0; }
+#log .t { color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
+#log .seen { color: var(--good); } #log .left { color: var(--muted); }
+#log .error { color: var(--bad); }  #log .info { color: var(--accent); }
+
+.empty { color: var(--muted); font-size: 13px; padding: 6px 0; }
+#toast {
+  position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%) translateY(20px);
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+  padding: 10px 16px; font-size: 13px; opacity: 0; pointer-events: none; transition: .2s;
+  max-width: 90vw; z-index: 50;
+}
+#toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+#toast.bad { border-color: var(--bad); color: #ffb4ae; }
+details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; padding: 3px 0; }
+.hint { color: var(--muted); font-size: 12px; margin-top: 7px; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="dot" id="dot"></span>
+  <h1>One-Shot Face Recognition</h1>
+  <span class="stat" id="sourceLabel"></span>
+  <span class="spacer"></span>
+  <span class="stat" id="stats"></span>
+  <a class="stat" href="/api/docs" target="_blank" style="color:var(--accent)">API</a>
+</header>
+
+<main>
+  <div class="stack">
+    <div class="card">
+      <div id="viewport">
+        <img id="video" alt="Live recognition view">
+        <div id="placeholder">
+          Pick a source and press <b>Start</b>.<br>
+          <span style="font-size:12.5px">
+            Try <code>0</code> for a webcam, a path like <code>clips/party.mp4</code>,
+            a folder, or an <code>rtsp://…</code> stream.
+          </span>
+        </div>
+      </div>
+      <div class="body">
+        <div class="row">
+          <div style="flex:3 1 220px">
+            <label for="source">Source</label>
+            <input type="text" id="source" value="0"
+                   placeholder="0, clips/party.mp4, clips/, rtsp://…">
+          </div>
+          <div style="flex:0 0 auto; align-self:flex-end" class="row tight">
+            <button class="primary" id="startBtn">Start</button>
+            <button class="danger" id="stopBtn" disabled>Stop</button>
+          </div>
+        </div>
+        <div class="hint" id="hint"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>On screen now</h2>
+      <div class="body"><ul class="list" id="tracks"></ul></div>
+    </div>
+
+    <div class="card">
+      <h2>Activity</h2>
+      <div class="body"><div id="log"></div></div>
+    </div>
+  </div>
+
+  <div class="stack">
+    <div class="card">
+      <h2>Known people</h2>
+      <div class="body">
+        <div id="drop">
+          <b>Drop face photos here</b><br>
+          one photo per person is enough — the file name becomes the name
+        </div>
+        <input type="file" id="picker" multiple accept="image/*" hidden>
+        <ul class="list" id="people" style="margin-top:12px"></ul>
+        <div class="row tight" style="margin-top:12px">
+          <button id="calibrateBtn">Suggest a threshold</button>
+        </div>
+        <div class="hint" id="calibration"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Recognition</h2>
+      <div class="body stack">
+        <div>
+          <div class="slider-row"><label for="threshold">Match threshold</label><b id="thresholdV">0.38</b></div>
+          <input type="range" id="threshold" min="0.20" max="0.75" step="0.01" value="0.38">
+          <div class="hint">Higher is stricter. Lower if a known person shows as Unknown.</div>
+        </div>
+        <div>
+          <div class="slider-row"><label for="minQuality">Minimum face quality</label><b id="minQualityV">0.00</b></div>
+          <input type="range" id="minQuality" min="0" max="0.8" step="0.05" value="0">
+          <div class="hint">Leaves faces too small, soft or dark to judge as Unknown.</div>
+        </div>
+        <div>
+          <div class="slider-row"><label for="reverify">Re-verify every</label><b id="reverifyV">off</b></div>
+          <input type="range" id="reverify" min="0" max="15" step="1" value="0">
+          <div class="hint">Settled tracks skip the costly embedding. 3–5 is much faster.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Overlay</h2>
+      <div class="body stack">
+        <label class="switch"><input type="checkbox" id="show_face" checked> Face boxes</label>
+        <label class="switch"><input type="checkbox" id="show_body" checked> Body brackets</label>
+        <label class="switch"><input type="checkbox" id="show_attributes"> Age and gender</label>
+        <div class="hint" id="attributesHint" hidden>
+          Needs the model loaded at startup: restart with <code>--attributes</code>.
+        </div>
+        <label class="switch"><input type="checkbox" id="blur_unknown"> Blur unknown faces</label>
+        <details>
+          <summary>What the labels mean</summary>
+          <div class="hint">
+            <code>#3 Sara 0.96</code> — track 3, matched Sara at 0.96 similarity.<br>
+            <code>~body</code> — held by their clothing because the face is unreadable.<br>
+            <code>M ~29</code> — estimated gender and age, when that is switched on.
+          </div>
+        </details>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+let lastEvent = 0, polling = null, running = false;
+
+function toast(text, bad) {
+  const box = $('toast');
+  box.textContent = text;
+  box.className = 'show' + (bad ? ' bad' : '');
+  clearTimeout(box._timer);
+  box._timer = setTimeout(() => (box.className = ''), bad ? 5200 : 2600);
+}
+
+async function api(path, options) {
+  const response = await fetch(path, options);
+  const text = await response.text();
+  let data = {};
+  try { data = text ? JSON.parse(text) : {}; } catch { data = { detail: text }; }
+  if (!response.ok) throw new Error(data.detail || response.statusText);
+  return data;
+}
+
+// A stable colour per name, matching what the overlay draws.
+function colourFor(name) {
+  let hash = 0;
+  for (const ch of name) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+  return `hsl(${hash % 360} 70% 62%)`;
+}
+
+// ------------------------------------------------------------------ gallery
+function renderPeople(people) {
+  const list = $('people');
+  if (!people || !people.length) {
+    list.innerHTML = '<li class="empty">Nobody enrolled yet.</li>';
+    return;
+  }
+  list.innerHTML = people.map(person => {
+    const warnings = (person.warnings || [])
+      .map(w => `<div class="warn">! ${escapeHtml(w)}</div>`).join('');
+    return `<li>
+        <span class="chip" style="background:${colourFor(person.name)}"></span>
+        <span class="name">${escapeHtml(person.name)}</span>
+        <span class="meta">${person.photos} photo${person.photos === 1 ? '' : 's'}</span>
+        <button class="x" title="Remove" data-person="${escapeHtml(person.name)}">&times;</button>
+      </li>${warnings}`;
+  }).join('');
+
+  list.querySelectorAll('button.x').forEach(button => {
+    button.onclick = async () => {
+      const who = button.dataset.person;
+      if (!confirm(`Remove ${who} and their reference photos?`)) return;
+      try {
+        const data = await api('/api/gallery/' + encodeURIComponent(who), { method: 'DELETE' });
+        renderPeople(data.people);
+        toast(`Removed ${who}`);
+      } catch (error) { toast(error.message, true); }
+    };
+  });
+}
+
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"']/g,
+    ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+}
+
+async function uploadFiles(fileList) {
+  const files = [...fileList].filter(f => f.type.startsWith('image/'));
+  if (!files.length) { toast('Those are not image files.', true); return; }
+  const form = new FormData();
+  files.forEach(file => form.append('files', file));
+  $('drop').textContent = `Enrolling ${files.length} photo${files.length === 1 ? '' : 's'}…`;
+  try {
+    const data = await api('/api/gallery', { method: 'POST', body: form });
+    renderPeople(data.people);
+    if (data.problem) {
+      toast(data.problem, true);
+    } else {
+      const rejected = (data.rejected || []).length;
+      toast(`Enrolled ${data.saved.length} photo(s)` +
+        (rejected ? `, ${rejected} rejected` : ''));
+    }
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    $('drop').innerHTML = '<b>Drop face photos here</b><br>' +
+      'one photo per person is enough — the file name becomes the name';
+  }
+}
+
+const drop = $('drop');
+drop.onclick = () => $('picker').click();
+$('picker').onchange = event => uploadFiles(event.target.files);
+['dragenter', 'dragover'].forEach(name => drop.addEventListener(name, event => {
+  event.preventDefault(); drop.classList.add('over');
+}));
+['dragleave', 'drop'].forEach(name => drop.addEventListener(name, event => {
+  event.preventDefault(); drop.classList.remove('over');
+}));
+drop.addEventListener('drop', event => uploadFiles(event.dataTransfer.files));
+
+$('calibrateBtn').onclick = async () => {
+  const button = $('calibrateBtn');
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Working…';
+  $('calibration').textContent = 'Loading the models and comparing everyone…';
+  try {
+    const data = await api('/api/calibrate');
+    $('calibration').textContent = data.explanation;
+    $('threshold').value = data.suggested;
+    $('thresholdV').textContent = Number(data.suggested).toFixed(2);
+    pushSettings();
+  } catch (error) {
+    $('calibration').textContent = '';
+    toast(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = label;
+  }
+};
+
+// ----------------------------------------------------------------- settings
+function currentSettings() {
+  return {
+    threshold: parseFloat($('threshold').value),
+    min_quality: parseFloat($('minQuality').value),
+    reverify_every: parseInt($('reverify').value, 10),
+    show_face: $('show_face').checked,
+    show_body: $('show_body').checked,
+    show_attributes: $('show_attributes').checked,
+    blur_unknown: $('blur_unknown').checked,
+  };
+}
+
+let settingsTimer = null;
+function pushSettings() {
+  clearTimeout(settingsTimer);
+  settingsTimer = setTimeout(async () => {
+    try {
+      await api('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(currentSettings()),
+      });
+    } catch (error) { toast(error.message, true); }
+  }, 180);
+}
+
+$('threshold').oninput = e => { $('thresholdV').textContent = (+e.target.value).toFixed(2); pushSettings(); };
+$('minQuality').oninput = e => {
+  $('minQualityV').textContent = (+e.target.value).toFixed(2);
+  pushSettings();
+};
+$('reverify').oninput = e => {
+  const n = +e.target.value;
+  $('reverifyV').textContent = n === 0 ? 'off' : `${n} frames`;
+  pushSettings();
+};
+['show_face', 'show_body', 'show_attributes', 'blur_unknown']
+  .forEach(id => ($(id).onchange = pushSettings));
+
+// ------------------------------------------------------------------ session
+$('startBtn').onclick = async () => {
+  const source = $('source').value.trim();
+  if (!source) { toast('Give a source first.', true); return; }
+  $('startBtn').disabled = true;
+  $('hint').textContent = 'Loading models and building the gallery…';
+  try {
+    await api('/api/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source, settings: currentSettings() }),
+    });
+    // Cache-bust so a restart does not show the previous stream.
+    $('video').src = '/api/stream.mjpg?t=' + Date.now();
+    $('video').style.display = 'block';
+    $('placeholder').style.display = 'none';
+    lastEvent = 0;
+    $('log').innerHTML = '';
+  } catch (error) {
+    toast(error.message, true);
+    $('startBtn').disabled = false;
+    $('hint').textContent = '';
+  }
+};
+
+$('stopBtn').onclick = async () => {
+  try { await api('/api/stop', { method: 'POST' }); } catch (error) { toast(error.message, true); }
+};
+
+function renderTracks(tracks) {
+  const list = $('tracks');
+  if (!tracks.length) {
+    list.innerHTML = '<li class="empty">' +
+      (running ? 'Nobody in frame.' : 'Not running.') + '</li>';
+    return;
+  }
+  list.innerHTML = tracks.map(track => {
+    const extra = [
+      track.by_body ? 'by clothing' : null,
+      track.gender ? `${track.gender} ~${track.age}` : null,
+    ].filter(Boolean).join(' · ');
+    return `<li>
+      <span class="chip" style="background:${track.known ? colourFor(track.name) : '#7b8794'}"></span>
+      <span class="name">${escapeHtml(track.name)}
+        ${extra ? `<span class="meta"> — ${extra}</span>` : ''}</span>
+      <span class="meta">${track.score.toFixed(2)}</span>
+    </li>`;
+  }).join('');
+}
+
+function appendEvents(events) {
+  if (!events.length) return;
+  const log = $('log');
+  const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
+  events.forEach(event => {
+    const row = document.createElement('div');
+    const text = event.kind === 'seen' ? `${event.name} appeared`
+      : event.kind === 'left' ? `${event.name} left`
+      : event.detail || event.kind;
+    row.innerHTML = `<span class="t">${event.at_text.slice(3)}</span>` +
+      `<span class="${event.kind}">${escapeHtml(text)}</span>`;
+    log.appendChild(row);
+  });
+  while (log.children.length > 300) log.removeChild(log.firstChild);
+  if (atBottom) log.scrollTop = log.scrollHeight;
+}
+
+async function poll() {
+  try {
+    const state = await api('/api/state');
+    running = state.status === 'running';
+
+    $('dot').className = 'dot ' + state.status;
+    // Long paths belong in the tooltip, not across the header.
+    $('sourceLabel').textContent = (state.source || '').split(/[\\/]/).pop();
+    $('sourceLabel').title = state.source || '';
+    $('stats').textContent = running
+      ? `${state.fps.toFixed(1)} FPS · frame ${state.frame} · ${state.elapsed.toFixed(0)}s`
+      : state.status;
+    $('startBtn').disabled = running || state.status === 'starting';
+    $('stopBtn').disabled = !running;
+
+    if (state.status === 'error' && state.message) {
+      $('hint').textContent = state.message;
+    } else if (running) {
+      $('hint').textContent = '';
+    } else if (state.status === 'stopped') {
+      $('hint').textContent = 'Finished. ' +
+        (state.seen.length ? 'Seen: ' + state.seen.join(', ') : 'Nobody recognised.');
+      $('video').style.display = 'none';
+      $('placeholder').style.display = 'block';
+    }
+
+    renderTracks(state.tracks || []);
+    renderPeople(state.gallery || []);
+    applyServerSettings(state.settings);
+
+    const data = await api('/api/events?since=' + lastEvent);
+    lastEvent = data.now;
+    appendEvents(data.events);
+  } catch (error) {
+    $('stats').textContent = 'server unreachable';
+    $('dot').className = 'dot error';
+  }
+}
+
+let settingsInitialised = false;
+function applyServerSettings(settings) {
+  if (!settings || settingsInitialised) return;
+  settingsInitialised = true;
+  $('threshold').value = settings.threshold;
+  $('thresholdV').textContent = settings.threshold.toFixed(2);
+  $('minQuality').value = settings.min_quality;
+  $('minQualityV').textContent = settings.min_quality.toFixed(2);
+  $('reverify').value = settings.reverify_every;
+  $('reverifyV').textContent = settings.reverify_every === 0
+    ? 'off' : `${settings.reverify_every} frames`;
+  $('show_face').checked = settings.show_face;
+  $('show_body').checked = settings.show_body;
+  $('show_attributes').checked = settings.show_attributes;
+  $('blur_unknown').checked = settings.blur_unknown;
+  if (!settings.attributes_available) {
+    $('show_attributes').checked = false;
+    $('show_attributes').disabled = true;
+    $('attributesHint').hidden = false;
+  }
+}
+
+poll();
+polling = setInterval(poll, 900);
+</script>
+</body>
+</html>

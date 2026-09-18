@@ -30,6 +30,12 @@ examples:
   # an RTSP camera, staying in the present instead of buffering
   python -m oneshot_fd --source rtsp://user:pass@192.168.1.10/stream --realtime
 
+  # the browser UI, at http://localhost:8000
+  python -m oneshot_fd --serve
+
+  # ... reachable from your phone on the same network
+  python -m oneshot_fd --serve --host 0.0.0.0
+
   # just check the gallery loads
   python -m oneshot_fd --faces input_faces --list-people
 """
@@ -66,6 +72,16 @@ def build_parser() -> argparse.ArgumentParser:
                           help="do not open a preview window (for servers and batch runs)")
     io_group.add_argument("--list-people", action="store_true",
                           help="build the gallery, print who is in it and exit")
+
+    web_group = parser.add_argument_group("web interface")
+    web_group.add_argument("--serve", action="store_true",
+                           help="run the browser UI and REST API instead of the "
+                                "desktop window")
+    web_group.add_argument("--host", default="127.0.0.1",
+                           help="address to serve on; 0.0.0.0 makes it reachable from "
+                                "other devices on your network (default: 127.0.0.1)")
+    web_group.add_argument("--port", type=int, default=8000,
+                           help="port for the web UI (default: 8000)")
 
     rec_group = parser.add_argument_group("recognition")
     rec_group.add_argument("-t", "--threshold", type=float, default=0.38, metavar="F",
@@ -227,6 +243,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         if args.list_people:
             return list_people(config)
+        if args.serve:
+            from .web import serve
+
+            serve(config, host=args.host, port=args.port)
+            return 0
         return run_app(config)
     except KeyboardInterrupt:
         LOGGER.info("Stopped.")

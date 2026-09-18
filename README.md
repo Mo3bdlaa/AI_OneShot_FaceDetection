@@ -10,6 +10,8 @@ name on screen.
 - 📹 **Any input**: webcam, video file, whole folders of videos, globs, RTSP/HTTP streams, image sequences
 - 🖍️ **Live highlighting**: face box + body brackets + name + confidence, one stable colour per person
 - 🧠 **Stable names**: tracking and vote smoothing stop labels from flickering frame to frame
+- 🖥️ **Browser UI**: drag photos in, pick a source, watch it live, tune it while it runs
+- 🔌 **REST API + Docker**: drive it from any language, or `docker compose up`
 - 📝 **A record of what happened**: CSV of who appeared, when, and for how long
 
 Built on **InsightFace** (SCRFD detection + ArcFace embeddings), with optional
@@ -79,7 +81,59 @@ people look to this model, so the suggested threshold sits just above the
 closest pair. A pair at 0.9+ almost always means the same person is enrolled
 twice under two names — which otherwise shows up as maddening label flicker.
 
-## Run it
+## Run it in a browser
+
+```bash
+pip install -r requirements-web.txt
+python run.py --serve                    # http://localhost:8000
+python run.py --serve --host 0.0.0.0     # ...also from your phone on the same network
+```
+
+The page lets you drag reference photos in, pick a camera or a file, watch the
+annotated video live, and move the threshold, quality gate and overlay switches
+while it is running. It shows who is on screen with the same colour the overlay
+draws, and logs everyone as they come and go.
+
+![the web UI](docs/ui.png)
+
+Everything it does is a plain HTTP call, so scripts can do the same — the
+interactive API docs are at `/api/docs`:
+
+```bash
+curl -F "files=@Mohammed.jpg" -F "files=@Sara.jpg" localhost:8000/api/gallery
+curl -X POST localhost:8000/api/start -H 'Content-Type: application/json' \
+     -d '{"source": "0"}'
+curl localhost:8000/api/state                       # who is on screen right now
+curl -X POST localhost:8000/api/settings -H 'Content-Type: application/json' \
+     -d '{"threshold": 0.45}'                       # takes effect immediately
+curl -F "file=@party.mp4" localhost:8000/api/analyse # process a clip, get JSON back
+```
+
+| Endpoint | What it does |
+|---|---|
+| `GET /api/state` | status, FPS, who is on screen, the gallery, current settings |
+| `GET /api/stream.mjpg` | the annotated video, renderable in a plain `<img>` |
+| `GET /api/frame.jpg` | just the latest annotated frame |
+| `GET /api/events?since=` | who appeared and left, since a timestamp |
+| `POST /api/start` / `stop` | run a camera, file, folder or stream |
+| `POST /api/settings` | change thresholds and overlays while running |
+| `GET`/`POST`/`DELETE /api/gallery` | list, upload and remove reference photos |
+| `GET /api/calibrate` | the threshold the gallery itself suggests |
+| `POST /api/analyse` | process an uploaded video, return the appearances |
+| `GET /api/health` | liveness, for Docker and load balancers |
+
+## Run it in Docker
+
+```bash
+docker compose up
+```
+
+Put your photos in `./input_faces` and open <http://localhost:8000>. The models
+are baked into the image during the build, so the container starts ready and
+needs no network at run time. Any CLI flag works as a `command:` entry in
+`docker-compose.yml`.
+
+## Run it from the command line
 
 ```bash
 # live webcam
@@ -247,6 +301,11 @@ folder, which is useful when you only have consent for specific people.
 Run `python run.py --help`. The main ones:
 
 ```
+web interface
+      --serve            run the browser UI and REST API
+      --host ADDR        0.0.0.0 to reach it from other devices (127.0.0.1)
+      --port N           default 8000
+
 input / output
   -f, --faces DIR        folder of reference photos (default: input_faces)
   -s, --source SRC       camera index, file, folder, glob or URL; repeatable
