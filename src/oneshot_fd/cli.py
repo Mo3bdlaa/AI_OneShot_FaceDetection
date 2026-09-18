@@ -80,6 +80,14 @@ def build_parser() -> argparse.ArgumentParser:
                                 "on live video (default: 0, verify every face)")
     rec_group.add_argument("--unknown-label", default="Unknown",
                            help="label for faces that match nobody (default: Unknown)")
+    rec_group.add_argument("--min-quality", type=float, default=0.0, metavar="F",
+                           help="leave faces below this quality score (0..1) as Unknown "
+                                "instead of risking a confident mislabel; try 0.45")
+    rec_group.add_argument("--reject-below", type=float, default=0.0, metavar="F",
+                           help="refuse reference photos below this quality score "
+                                "instead of enrolling them with a warning")
+    rec_group.add_argument("--no-quality-check", dest="quality_check", action="store_false",
+                           help="do not inspect reference photos at all")
     rec_group.add_argument("--rebuild-gallery", action="store_true",
                            help="ignore the cached embeddings and re-enrol every photo")
     rec_group.add_argument("--no-flip-augment", dest="flip_augment", action="store_false",
@@ -153,6 +161,8 @@ def config_from_args(args: argparse.Namespace) -> AppConfig:
             path=Path(args.faces),
             use_flip_augmentation=args.flip_augment,
             force_rebuild=args.rebuild_gallery,
+            check_quality=args.quality_check,
+            reject_below=args.reject_below,
         ),
         face=FaceConfig(
             model_name=args.model,
@@ -167,6 +177,7 @@ def config_from_args(args: argparse.Namespace) -> AppConfig:
             margin=args.margin,
             vote_window=max(1, args.vote_window),
             reverify_every=max(0, args.reverify_every),
+            min_quality=args.min_quality,
             unknown_label=args.unknown_label,
         ),
         tracking=TrackingConfig(enabled=args.tracking),

@@ -58,6 +58,27 @@ Check it loaded everyone:
 python run.py --list-people
 ```
 
+That also inspects each photo and tells you what a threshold ought to be:
+
+```
+Gallery: 6 known people
+  - Ahmed (2 embeddings)
+  - BlurryGuy (2 embeddings)  [1 photo warning(s)]
+      ! BlurryGuy.jpg: face is only 36px across (want 90px+)
+
+Most similar pairs (higher means harder to tell apart):
+  0.232  Laila <-> Omar
+
+Suggested --threshold 0.30
+  The two most similar people in the gallery are Laila and Omar at 0.232.
+  Everyone is comfortably distinct, so the threshold stays at the 0.30 floor.
+```
+
+The people you enrolled are the best evidence of how alike two *different*
+people look to this model, so the suggested threshold sits just above the
+closest pair. A pair at 0.9+ almost always means the same person is enrolled
+twice under two names — which otherwise shows up as maddening label flicker.
+
 ## Run it
 
 ```bash
@@ -123,7 +144,9 @@ Recognised people:
 
 | Problem | Fix |
 |---|---|
+| Not sure what threshold to use | run `--list-people` and use the number it suggests |
 | A known person shows up as `Unknown` | lower `--threshold` (try `0.32`), or add another photo of them |
+| A stranger gets confidently named | raise `--min-quality` to `0.45` so poor faces stay `Unknown` |
 | Two people get confused with each other | raise `--threshold` (try `0.45`) and `--margin` (try `0.08`) |
 | Small or distant faces are missed | raise `--det-size` to `960`, or lower `--det-threshold` to `0.35` |
 | The name flickers between frames | raise `--vote-window` (try `24`) |
@@ -185,6 +208,23 @@ The YOLO weights download on first use into the current directory. YOLO is a
 second model per frame, so it does cost speed — use `--body estimate` to force
 the free path, or `--body off` for faces only.
 
+### Reference photo quality
+
+Every enrolment photo is checked for the three things that actually break
+one-shot recognition — a face too small to carry detail, one out of focus, and
+one too dark or blown out — and the specific problem is reported rather than
+silently baked into the gallery. `--reject-below 0.4` refuses those photos
+outright instead of warning; `--no-quality-check` skips the inspection.
+
+The same scoring runs on video with `--min-quality 0.45`: a face too degraded
+to judge is left `Unknown` instead of being confidently mislabelled.
+
+Head pose is deliberately *not* checked. Two cheap estimates built from the
+five facial keypoints were measured against photos the recogniser handles
+perfectly, and neither tracked head rotation — one scored good photos anywhere
+from 0.07 to 0.89, the other did not move when a face was turned. A pose
+warning that fires on a good photo costs more than the check is worth.
+
 ### Age and gender
 
 `--attributes` also estimates each person's age and gender and shows them
@@ -220,6 +260,8 @@ recognition
       --margin F         how far the best match must beat the runner-up (0.03)
       --vote-window N    frames a track votes over before committing (12)
       --reverify-every N settled tracks skip the embedding for N detections
+      --min-quality F    leave faces below this quality (0..1) as Unknown
+      --reject-below F   refuse reference photos below this quality
       --rebuild-gallery  re-enrol every photo, ignoring the cache
 
 models / speed
@@ -304,7 +346,7 @@ pip install pytest
 pytest
 ```
 
-85 tests covering geometry, gallery matching, tracking, body association,
+96 tests covering geometry, gallery matching, tracking, body association,
 source handling, rendering, CLI parsing and the pipeline. They use stand-in
 models, so they run in under a second and need no downloads.
 

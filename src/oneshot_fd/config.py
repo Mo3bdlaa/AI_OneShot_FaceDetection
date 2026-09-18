@@ -26,6 +26,12 @@ class GalleryConfig:
     cache: bool = True
     #: Recompute the cache even when it looks up to date.
     force_rebuild: bool = False
+    #: Report what is wrong with weak reference photos instead of silently
+    #: enrolling them.
+    check_quality: bool = True
+    #: Refuse a reference photo whose quality score falls below this (0..1).
+    #: 0 enrols everything and only warns.
+    reject_below: float = 0.0
 
 
 @dataclass
@@ -62,6 +68,9 @@ class RecognitionConfig:
     vote_window: int = 12
     #: Fraction of the votes the winner needs to own the track.
     vote_ratio: float = 0.5
+    #: Faces in the video below this quality score (0..1) are left Unknown
+    #: rather than risk a confident mislabel. 0 disables the check.
+    min_quality: float = 0.0
     #: Label used when nobody in the gallery matches.
     unknown_label: str = "Unknown"
     #: Once a track has settled on a name, re-run the (expensive) embedding

@@ -25,6 +25,7 @@ import numpy as np
 
 from .config import GalleryConfig
 from .faces import FaceEngine
+from .quality import assess, calibrate_threshold
 from .utils import IMAGE_SUFFIXES, LOGGER, imread_unicode, iter_images, l2_normalize
 
 CACHE_VERSION = 2
@@ -37,6 +38,12 @@ class Person:
     name: str
     embeddings: np.ndarray      # (n, 512), L2-normalised
     sources: List[str]          # the files each embedding came from
+    #: What the quality check made of each enrolled photo, worst first.
+    warnings: List[str] = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.warnings is None:
+            self.warnings = []
 
     @property
     def centroid(self) -> np.ndarray:
@@ -123,6 +130,7 @@ class Gallery:
         for name, paths in grouped.items():
             vectors: List[np.ndarray] = []
             sources: List[str] = []
+            warnings: List[str] = []
             for path in paths:
                 image = imread_unicode(path)
                 if image is None:
@@ -133,6 +141,18 @@ class Gallery:
                 if face is None or face.embedding is None:
                     skipped.append(f"{path.name} (no clear face)")
                     continue
+
+                if self.config.check_quality:
+                    quality = assess(image, face.box, face.landmarks, face.score,
+                                     reference=True)
+                    if quality.issues:
+                        note = f"{path.name}: {quality.describe()}"
+                        warnings.append(note)
+                        if quality.score < self.config.reject_below:
+                            LOGGER.warning("  rejected %s", note)
+                            skipped.append(note)
+                            continue
+                        LOGGER.warning("  %s", note)
 
                 vectors.append(face.embedding)
                 sources.append(str(path))
@@ -150,7 +170,8 @@ class Gallery:
                 continue
 
             people.append(
-                Person(name=name, embeddings=np.vstack(vectors).astype(np.float32), sources=sources)
+                Person(name=name, embeddings=np.vstack(vectors).astype(np.float32),
+                       sources=sources, warnings=warnings)
             )
             LOGGER.info("  %-24s %d embedding(s) from %d photo(s)",
                         name, len(vectors), len(paths))
@@ -308,9 +329,51 @@ class Gallery:
             LOGGER.debug("Could not read gallery cache (%s); rebuilding.", exc)
             return False
 
+    # ------------------------------------------------------------- calibration
+    def suggest_threshold(self, headroom: float = 0.06):
+        """Propose a threshold that keeps the enrolled people apart.
+
+        See :func:`oneshot_fd.quality.calibrate_threshold`.
+        """
+        return calibrate_threshold(
+            [(person.name, person.embeddings) for person in self.people],
+            headroom=headroom,
+        )
+
+    def closest_pairs(self, limit: int = 5):
+        """The most confusable pairs of enrolled people, worst first.
+
+        Useful for spotting the same person enrolled twice under two names,
+        which otherwise shows up as maddening label flicker at run time.
+        """
+        pairs = []
+        for index, person_a in enumerate(self.people):
+            for person_b in self.people[index + 1:]:
+                similarity = float((person_a.embeddings @ person_b.embeddings.T).max())
+                pairs.append((similarity, person_a.name, person_b.name))
+        pairs.sort(reverse=True)
+        return pairs[:limit]
+
     # ------------------------------------------------------------------ misc
     def summary(self) -> str:
         lines = [f"Gallery: {len(self.people)} known people"]
         for person in self.people:
-            lines.append(f"  - {person.name} ({len(person.embeddings)} embeddings)")
+            line = f"  - {person.name} ({len(person.embeddings)} embeddings)"
+            if person.warnings:
+                line += f"  [{len(person.warnings)} photo warning(s)]"
+            lines.append(line)
+            for warning in person.warnings:
+                lines.append(f"      ! {warning}")
+
+        pairs = self.closest_pairs(3)
+        if pairs:
+            lines.append("")
+            lines.append("Most similar pairs (higher means harder to tell apart):")
+            for similarity, name_a, name_b in pairs:
+                lines.append(f"  {similarity:.3f}  {name_a} <-> {name_b}")
+
+        suggested, _, explanation = self.suggest_threshold()
+        lines.append("")
+        lines.append(f"Suggested --threshold {suggested:.2f}")
+        lines.append(f"  {explanation}")
         return "\n".join(lines)

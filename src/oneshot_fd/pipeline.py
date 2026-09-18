@@ -17,6 +17,7 @@ from .config import AppConfig
 from .drawing import Renderer
 from .faces import FaceEngine
 from .gallery import Gallery
+from .quality import assess
 from .tracking import Track, Tracker
 from .utils import LOGGER, format_timestamp, resize_to_width
 
@@ -79,6 +80,7 @@ class Pipeline:
         #: Counters behind the "embeddings skipped" line in the run summary.
         self._embeddings = 0
         self._skipped_embeddings = 0
+        self._low_quality = 0
 
     # --------------------------------------------------------------- startup
     def prepare(self) -> "Pipeline":
@@ -174,6 +176,12 @@ class Pipeline:
                 scores.append(track.label_score)
                 self._skipped_embeddings += 1
                 continue
+            if self._too_poor_to_judge(frame, face):
+                # Better an honest Unknown than a confident mistake.
+                names.append(recognition.unknown_label)
+                scores.append(0.0)
+                continue
+
             self.engine.embed(frame, face)
             match = self.gallery.identify(
                 face.embedding, recognition.threshold, recognition.margin,
@@ -185,6 +193,17 @@ class Pipeline:
 
         detections = self._build_detections(frame, faces, names, scores)
         return self.tracker.commit(detections, assignment, timestamp)
+
+    def _too_poor_to_judge(self, frame: np.ndarray, face) -> bool:
+        """True when a face is too degraded for its embedding to mean anything."""
+        minimum = self.config.recognition.min_quality
+        if minimum <= 0:
+            return False
+        quality = assess(frame, face.box, face.landmarks, face.score)
+        if quality.score >= minimum:
+            return False
+        self._low_quality += 1
+        return True
 
     def _settled_track(self, track_index: Optional[int]) -> Optional[Track]:
         """The track at ``track_index``, if it may skip this frame's embedding."""
@@ -366,6 +385,12 @@ class Pipeline:
             entry[2] = max(entry[2], appearance.best_score)
 
         lines = []
+        if self._low_quality:
+            lines.append(
+                f"Quality gate: {self._low_quality} face(s) were too small, soft or "
+                "turned away to identify, and were left Unknown."
+            )
+            lines.append("")
         total = self._embeddings + self._skipped_embeddings
         if self._skipped_embeddings and total:
             lines.append(
