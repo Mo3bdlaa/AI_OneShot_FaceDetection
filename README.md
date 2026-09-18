@@ -89,10 +89,28 @@ python run.py --serve                    # http://localhost:8000
 python run.py --serve --host 0.0.0.0     # ...also from your phone on the same network
 ```
 
-The page lets you drag reference photos in, pick a camera or a file, watch the
-annotated video live, and move the threshold, quality gate and overlay switches
-while it is running. It shows who is on screen with the same colour the overlay
-draws, and logs everyone as they come and go.
+Drag reference photos in, drop a video on it or point it at a camera, watch the
+annotated result live, and move the threshold, quality gate and overlay
+switches while it runs. It shows who is on screen in the same colours the
+overlay draws, logs everyone as they come and go, and offers the annotated
+video and a CSV of appearances when the run finishes.
+
+### Reaching it from another device
+
+On `127.0.0.1` there is no password, because nobody else can reach it. Bind it
+to `0.0.0.0` and that changes — anyone on the network could enrol people,
+delete photos or switch on the camera — so a token is then required, and one is
+printed if you did not choose your own:
+
+```
+[WARNING] Serving on 0.0.0.0, which other machines can reach, so access needs a token.
+          Open:  http://<this-machine>:<port>/?token=A7fQ2p_xKd91
+```
+
+Open that link once and the browser remembers it. Scripts send it as
+`X-Token:` or `?token=`. Use `--token` to choose your own, or `--no-token` if
+something in front is already doing the gatekeeping. `/api/health` stays open
+so container health checks keep working.
 
 ![the web UI](docs/ui.png)
 
@@ -106,7 +124,9 @@ curl -X POST localhost:8000/api/start -H 'Content-Type: application/json' \
 curl localhost:8000/api/state                       # who is on screen right now
 curl -X POST localhost:8000/api/settings -H 'Content-Type: application/json' \
      -d '{"threshold": 0.45}'                       # takes effect immediately
-curl -F "file=@party.mp4" localhost:8000/api/analyse # process a clip, get JSON back
+curl -F "file=@party.mp4" localhost:8000/api/source  # upload a clip, get a path to start
+curl -F "file=@party.mp4" localhost:8000/api/analyse # or process it and get JSON back
+curl -O localhost:8000/api/appearances.csv          # who was seen, when
 ```
 
 | Endpoint | What it does |
@@ -119,6 +139,9 @@ curl -F "file=@party.mp4" localhost:8000/api/analyse # process a clip, get JSON 
 | `POST /api/settings` | change thresholds and overlays while running |
 | `GET`/`POST`/`DELETE /api/gallery` | list, upload and remove reference photos |
 | `GET /api/calibrate` | the threshold the gallery itself suggests |
+| `POST /api/source` | upload a video and get back a path to start on |
+| `GET /api/appearances.csv` | who was seen, when and for how long |
+| `GET /api/recording.mp4` | the annotated video, if recording was on |
 | `POST /api/analyse` | process an uploaded video, return the appearances |
 | `GET /api/health` | liveness, for Docker and load balancers |
 
@@ -309,6 +332,8 @@ web interface
       --serve            run the browser UI and REST API
       --host ADDR        0.0.0.0 to reach it from other devices (127.0.0.1)
       --port N           default 8000
+      --token SECRET     require this token; generated if the host is reachable
+      --no-token         serve an exposed host with no token at all
 
 input / output
   -f, --faces DIR        folder of reference photos (default: input_faces)

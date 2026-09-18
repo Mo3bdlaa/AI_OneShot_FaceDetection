@@ -207,3 +207,28 @@ def test_a_new_face_is_never_taken_at_another_tracks_word(frame):
         result = pipeline.process_frame(frame, index, index / 25.0)
 
     assert {t.label for t in result.tracks} == {"Mohammed", "Sara"}
+
+
+def test_someone_still_on_screen_is_in_the_running_report(frame):
+    """A report taken mid-run must include the people you can still see."""
+    pipeline = make_pipeline([[face((100, 100, 200, 220), MOHAMMED)]])
+    for index in range(6):
+        pipeline.process_frame(frame, index, index / 25.0)
+
+    assert pipeline.appearances == [], "their appearance has not ended yet"
+    current = pipeline.current_appearances()
+    assert [a.name for a in current] == ["Mohammed"]
+    # ... and asking must not have ended it.
+    assert pipeline.appearances == []
+
+
+def test_reset_clears_the_report_for_a_fresh_run(frame):
+    pipeline = make_pipeline([[face((100, 100, 200, 220), MOHAMMED)]])
+    for index in range(6):
+        pipeline.process_frame(frame, index, index / 25.0)
+    assert pipeline.current_appearances()
+
+    pipeline.reset_results()
+    assert pipeline.appearances == []
+    assert "No known person" in pipeline.summary()
+    assert pipeline._embeddings == 0

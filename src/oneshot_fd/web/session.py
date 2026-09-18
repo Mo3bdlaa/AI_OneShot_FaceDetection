@@ -63,6 +63,8 @@ class Session:
         self.status = "idle"          # idle | starting | running | stopped | error
         self.message = ""
         self.source = ""
+        #: Where the annotated video is being written, when recording is on.
+        self.recording_path: Optional[Path] = None
         self.fps = 0.0
         self.started_at = 0.0
 
@@ -87,6 +89,8 @@ class Session:
                 "seen": sorted(self._seen_names),
                 "gallery": self._gallery_json(),
                 "settings": self._settings_json(),
+                "recording": self.recording_path.name if self.recording_path else None,
+                "has_results": bool(self.pipeline and self.pipeline.current_appearances()),
             }
 
     def _tracks_json(self) -> List[Dict[str, Any]]:
@@ -187,12 +191,17 @@ class Session:
                 self._jpeg = buffer.tobytes()
 
     # ----------------------------------------------------------------- control
-    def start(self, source: str) -> None:
-        """Begin processing ``source`` on a worker thread."""
+    def start(self, source: str, record_to: Optional[Path] = None) -> None:
+        """Begin processing ``source`` on a worker thread.
+
+        With ``record_to``, the annotated frames are also written to that file,
+        which the UI offers for download once the run ends.
+        """
         if self.is_running:
             raise RuntimeError("A session is already running. Stop it first.")
 
         self.source = source
+        self.recording_path = record_to
         self.status = "starting"
         self.message = ""
         self.events.clear()
@@ -201,8 +210,11 @@ class Session:
         self._frame_number = 0
         self._stop.clear()
         self.started_at = time.time()
+        if self.pipeline is not None:
+            # This run's report should be about this run.
+            self.pipeline.reset_results()
 
-        self._thread = threading.Thread(target=self._run, args=(source,),
+        self._thread = threading.Thread(target=self._run, args=(source, record_to),
                                         daemon=True, name="recognition")
         self._thread.start()
 
@@ -251,7 +263,10 @@ class Session:
         return result
 
     # -------------------------------------------------------------- the worker
-    def _run(self, source: str) -> None:
+    def _run(self, source: str, record_to: Optional[Path] = None) -> None:
+        from ..sources import VideoWriter
+
+        writer: Optional[VideoWriter] = None
         try:
             pipeline = self.ensure_pipeline()
             self.status = "running"
@@ -263,6 +278,14 @@ class Session:
                 self._publish(result.frame, result.index, result.fps)
                 self._track_names(result)
 
+                if record_to is not None:
+                    if writer is None:
+                        info = pipeline.source_info
+                        writer = VideoWriter(record_to, fps=(info.fps if info else 0.0) or 25.0)
+                        self._note("info", "", result.timestamp,
+                                   f"Recording to {record_to.name}")
+                    writer.write(result.frame)
+
             if not self._stop.is_set():
                 self._note("info", "", 0.0, "Source finished")
                 self.status = "stopped"
@@ -272,6 +295,8 @@ class Session:
             self.message = str(exc)
             self._note("error", "", 0.0, str(exc))
         finally:
+            if writer is not None:
+                writer.close()
             self._stop.set()
 
     def _track_names(self, result) -> None:

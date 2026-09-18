@@ -19,6 +19,9 @@ Endpoints
 ``GET  /api/health``        liveness, for Docker and load balancers
 """
 
+import csv
+import io
+import re
 import shutil
 import tempfile
 import time
@@ -36,7 +39,8 @@ except ImportError as _exc:  # pragma: no cover - depends on the install
     ) from _exc
 
 from ..config import AppConfig
-from ..utils import IMAGE_SUFFIXES, LOGGER
+from ..utils import IMAGE_SUFFIXES, LOGGER, VIDEO_SUFFIXES, format_timestamp
+from . import auth
 from .session import Session
 
 BOUNDARY = "oneshotframe"
@@ -54,6 +58,50 @@ _FAVICON = (
 )
 
 
+def _work_dir(config: AppConfig) -> Path:
+    """Where uploads and recordings live: beside the gallery, not in /tmp.
+
+    Putting them next to the reference photos means a Docker volume that keeps
+    one keeps the other, and nothing important lands somewhere the host wipes
+    on reboot.
+    """
+    return Path(config.gallery.path).resolve().parent / ".oneshot_work"
+
+
+#: How many uploaded clips and recordings to keep around.
+KEEP_FILES = 5
+
+
+def _make_room(folder: Path, keep: int = KEEP_FILES) -> None:
+    """Delete old files so that adding one more leaves at most ``keep``.
+
+    Called before writing, so the count after the new file lands is exactly
+    ``keep`` rather than ``keep + 1``. Uploads and recordings both accumulate
+    otherwise, and neither is worth filling a disk over.
+    """
+    try:
+        files = sorted((p for p in folder.iterdir() if p.is_file()),
+                       key=lambda p: p.stat().st_mtime, reverse=True)
+        for stale in files[max(0, keep - 1):]:
+            stale.unlink(missing_ok=True)
+    except OSError as exc:
+        LOGGER.debug("Could not prune %s: %s", folder, exc)
+
+
+def _recording_stem(source: str) -> str:
+    """A readable name for the output file, without stacking up timestamps.
+
+    An uploaded clip already carries the upload time in its name, so reusing
+    that whole stem would produce ``1789716306_clip_1789716306.mp4``.
+    """
+    if source.isdigit():
+        return f"camera{source}"
+    if "://" in source:
+        return "stream"
+    stem = Path(source).stem or "session"
+    return re.sub(r"^\d{9,}_", "", stem)
+
+
 def _safe_person_name(raw: str) -> str:
     """Keep uploads inside the gallery folder, whatever the browser sends."""
     name = Path(str(raw)).name.strip()
@@ -63,14 +111,20 @@ def _safe_person_name(raw: str) -> str:
     return name
 
 
-def create_app(config: Optional[AppConfig] = None):
-    """Build the FastAPI application around one :class:`Session`."""
+def create_app(config: Optional[AppConfig] = None, token: Optional[str] = None):
+    """Build the FastAPI application around one :class:`Session`.
+
+    ``token``, when given, must accompany every request except the health
+    check. See :mod:`oneshot_fd.web.auth`.
+    """
     config = config or AppConfig()
     session = Session(config)
 
     app = FastAPI(title="One-Shot Face Recognition", version="1.0.0",
                   docs_url="/api/docs", redoc_url=None)
     app.state.session = session
+    app.state.token = token
+    auth.install(app, token)
 
     # ------------------------------------------------------------------- page
     @app.get("/", response_class=HTMLResponse)
@@ -146,11 +200,20 @@ def create_app(config: Optional[AppConfig] = None):
             raise HTTPException(status_code=400, detail="Give a camera index, path or URL.")
         if payload.get("settings"):
             session.apply_settings(payload["settings"])
+
+        record_to = None
+        if payload.get("record"):
+            recordings = _work_dir(config) / "recordings"
+            recordings.mkdir(parents=True, exist_ok=True)
+            _make_room(recordings)
+            record_to = recordings / f"{_recording_stem(source)}_{int(time.time())}.mp4"
+
         try:
-            session.start(source)
+            session.start(source, record_to=record_to)
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
-        return {"started": True, "source": source}
+        return {"started": True, "source": source,
+                "recording": str(record_to) if record_to else None}
 
     @app.post("/api/stop")
     def stop():
@@ -251,6 +314,72 @@ def create_app(config: Optional[AppConfig] = None):
             ],
         }
 
+    # ----------------------------------------------------------- run a upload
+    @app.post("/api/source")
+    async def upload_source(file: UploadFile = File(...)):
+        """Save an uploaded video so a session can be started on it.
+
+        Kept separate from /api/start so the upload finishes before processing
+        begins - a browser should not hold one request open for both.
+        """
+        suffix = Path(file.filename or "clip.mp4").suffix.lower()
+        if suffix not in VIDEO_SUFFIXES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{suffix or 'That file'} is not a video. Supported: "
+                       + ", ".join(sorted(VIDEO_SUFFIXES)),
+            )
+
+        uploads = _work_dir(config) / "uploads"
+        uploads.mkdir(parents=True, exist_ok=True)
+        _make_room(uploads)
+
+        target = uploads / f"{int(time.time())}_{_safe_person_name(file.filename or 'clip.mp4')}"
+        with target.open("wb") as handle:
+            shutil.copyfileobj(file.file, handle)
+        LOGGER.info("Stored uploaded clip at %s", target)
+        return {"path": str(target), "name": file.filename, "bytes": target.stat().st_size}
+
+    # ----------------------------------------------------------------- results
+    @app.get("/api/appearances.csv")
+    def appearances_csv():
+        """Who was seen, when and for how long - the same columns as --log-csv."""
+        if session.pipeline is None:
+            raise HTTPException(status_code=404, detail="Nothing has been processed yet.")
+
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow(["source", "name", "track_id", "start", "end",
+                         "duration_s", "best_score", "frames"])
+        # Include whoever is on screen right now, so a mid-run download is not
+        # mysteriously missing the people you can see in the picture.
+        for appearance in session.pipeline.current_appearances():
+            writer.writerow([
+                appearance.source, appearance.name, appearance.track_id,
+                format_timestamp(appearance.start_time),
+                format_timestamp(appearance.end_time),
+                f"{max(0.0, appearance.end_time - appearance.start_time):.2f}",
+                f"{appearance.best_score:.3f}", appearance.frames,
+            ])
+        return Response(
+            content=buffer.getvalue(), media_type="text/csv",
+            headers={"Content-Disposition": 'attachment; filename="appearances.csv"'},
+        )
+
+    @app.get("/api/recording.mp4")
+    def recording():
+        """The annotated video, when the session was started with recording on."""
+        path = session.recording_path
+        if not path or not Path(path).exists():
+            raise HTTPException(
+                status_code=404,
+                detail="No recording. Tick 'Save annotated video' before starting.",
+            )
+        return Response(
+            content=Path(path).read_bytes(), media_type="video/mp4",
+            headers={"Content-Disposition": f'attachment; filename="{Path(path).name}"'},
+        )
+
     # --------------------------------------------------------------- analysis
     @app.post("/api/analyse")
     async def analyse(file: UploadFile = File(...), max_frames: int = Form(0)):
@@ -305,8 +434,13 @@ def create_app(config: Optional[AppConfig] = None):
 
 
 def serve(config: Optional[AppConfig] = None, host: str = "127.0.0.1",
-          port: int = 8000, reload: bool = False) -> None:
-    """Run the web UI with uvicorn."""
+          port: int = 8000, token: Optional[str] = None,
+          require_token: bool = True) -> None:
+    """Run the web UI with uvicorn.
+
+    ``require_token=False`` serves an exposed host with no token at all, which
+    is the right choice only behind something else that does the gatekeeping.
+    """
     try:
         import uvicorn
     except ImportError as exc:  # pragma: no cover
@@ -315,9 +449,15 @@ def serve(config: Optional[AppConfig] = None, host: str = "127.0.0.1",
             "  pip install -r requirements-web.txt"
         ) from exc
 
-    app = create_app(config)
+    resolved = auth.resolve_token(token, host) if require_token else None
+    if not require_token and host not in auth.LOCAL_HOSTS:
+        LOGGER.warning("Serving on %s with --no-token: anyone who can reach this "
+                       "port can enrol people and start the camera.", host)
+
+    app = create_app(config, token=resolved)
     shown = "localhost" if host in ("127.0.0.1", "0.0.0.0") else host
-    LOGGER.info("Web UI on http://%s:%d  (API docs at /api/docs)", shown, port)
+    suffix = f"/?token={resolved}" if resolved else ""
+    LOGGER.info("Web UI on http://%s:%d%s  (API docs at /api/docs)", shown, port, suffix)
     if host == "0.0.0.0":
         LOGGER.info("Listening on all interfaces - reachable from other devices "
                     "on this network.")

@@ -82,6 +82,12 @@ def build_parser() -> argparse.ArgumentParser:
                                 "other devices on your network (default: 127.0.0.1)")
     web_group.add_argument("--port", type=int, default=8000,
                            help="port for the web UI (default: 8000)")
+    web_group.add_argument("--token", default=None, metavar="SECRET",
+                           help="require this token on every request. One is generated "
+                                "when serving on a reachable address and none is given")
+    web_group.add_argument("--no-token", dest="require_token", action="store_false",
+                           help="serve with no token even on a reachable address; only "
+                                "sensible behind something else that authenticates")
 
     rec_group = parser.add_argument_group("recognition")
     rec_group.add_argument("-t", "--threshold", type=float, default=0.38, metavar="F",
@@ -246,7 +252,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.serve:
             from .web import serve
 
-            serve(config, host=args.host, port=args.port)
+            serve(config, host=args.host, port=args.port,
+                  token=args.token, require_token=args.require_token)
             return 0
         return run_app(config)
     except KeyboardInterrupt:

@@ -242,3 +242,101 @@ def test_a_photo_with_no_face_in_it_does_not_break_the_upload(client, tmp_path):
     body = response.json()
     assert body["saved"] == ["Scenery.png"], "the file still lands on disk"
     assert "problem" in body, "and the user is told why nothing was enrolled"
+
+
+# ------------------------------------------------------- uploading a clip to run
+
+def mp4_bytes(name="clip.mp4"):
+    return (name, b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 64, "video/mp4")
+
+
+def test_a_video_upload_comes_back_as_a_path_to_start(client, tmp_path):
+    body = client.post("/api/source", files={"file": mp4_bytes("party.mp4")}).json()
+    path = __import__("pathlib").Path(body["path"])
+    assert path.exists()
+    assert path.name.endswith("party.mp4")
+    assert body["bytes"] > 0
+
+
+def test_a_photo_is_not_accepted_as_a_video(client):
+    response = client.post("/api/source", files={"file": png_bytes("face.png")})
+    assert response.status_code == 400
+    assert "not a video" in response.json()["detail"]
+
+
+def test_old_uploads_are_pruned_so_the_disk_does_not_fill(client, tmp_path):
+    from oneshot_fd.web.server import KEEP_FILES
+
+    for index in range(KEEP_FILES + 4):
+        client.post("/api/source", files={"file": mp4_bytes(f"clip{index}.mp4")})
+
+    uploads = tmp_path / ".oneshot_work" / "uploads"
+    remaining = sorted(path.name for path in uploads.iterdir())
+    assert len(remaining) == KEEP_FILES, remaining
+    # The newest survives; the first ones uploaded are gone.
+    assert any(name.endswith(f"clip{KEEP_FILES + 3}.mp4") for name in remaining)
+    assert not any(name.endswith("clip0.mp4") for name in remaining)
+
+
+@pytest.mark.parametrize("source, expected", [
+    ("0", "camera0"),
+    ("rtsp://cam/stream", "stream"),
+    ("/uploads/1789716306_party.mp4", "party"),   # the upload stamp is not repeated
+    ("/clips/meeting.mkv", "meeting"),
+])
+def test_recording_names_are_readable(source, expected):
+    from oneshot_fd.web.server import _recording_stem
+
+    assert _recording_stem(source) == expected
+
+
+# ---------------------------------------------------------------- the results
+
+def test_the_csv_has_the_same_columns_as_the_cli_log(client):
+    from oneshot_fd.pipeline import Appearance
+
+    client.app_session.pipeline._appearances.append(
+        Appearance(name="Mohammed", track_id=1, source="clip.mp4",
+                   start_time=1.0, end_time=3.5, best_score=0.91, frames=60)
+    )
+    response = client.get("/api/appearances.csv")
+    assert response.status_code == 200
+    assert "attachment" in response.headers["content-disposition"]
+
+    rows = response.text.strip().splitlines()
+    assert rows[0] == "source,name,track_id,start,end,duration_s,best_score,frames"
+    assert "Mohammed" in rows[1] and "00:00:01.000" in rows[1] and "2.50" in rows[1]
+
+
+def test_asking_for_a_recording_that_was_not_made(client):
+    response = client.get("/api/recording.mp4")
+    assert response.status_code == 404
+    assert "Save annotated video" in response.json()["detail"]
+
+
+def test_state_says_whether_there_is_anything_to_download(client):
+    from oneshot_fd.pipeline import Appearance
+
+    assert client.get("/api/state").json()["has_results"] is False
+    client.app_session.pipeline._appearances.append(
+        Appearance(name="Sara", track_id=1, source="c.mp4", start_time=0.0,
+                   end_time=1.0, best_score=0.9, frames=25)
+    )
+    assert client.get("/api/state").json()["has_results"] is True
+
+
+def test_a_new_session_does_not_inherit_the_last_run_s_results(client):
+    """The downloaded CSV must describe the run you just did, not every run."""
+    from oneshot_fd.pipeline import Appearance
+
+    client.app_session.pipeline._appearances.append(
+        Appearance(name="FromLastTime", track_id=1, source="old.mp4", start_time=0.0,
+                   end_time=1.0, best_score=0.9, frames=25)
+    )
+    assert "FromLastTime" in client.get("/api/appearances.csv").text
+
+    client.post("/api/start", json={"source": "/no/such/clip.mp4"})
+    for _ in range(50):
+        if client.get("/api/state").json()["status"] in ("error", "stopped"):
+            break
+    assert "FromLastTime" not in client.get("/api/appearances.csv").text

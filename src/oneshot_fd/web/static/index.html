@@ -90,6 +90,21 @@ button.danger  { background: transparent; border-color: var(--bad); color: var(-
 }
 #drop.over, #drop:hover { border-color: var(--accent); color: var(--text); background: rgba(77,163,255,.06); }
 
+#videoDrop {
+  margin-top: 10px; padding: 12px; text-align: center; font-size: 13px;
+  color: var(--muted); border: 1.5px dashed var(--line); border-radius: 9px;
+  cursor: pointer; transition: .15s;
+}
+#videoDrop.over, #videoDrop:hover {
+  border-color: var(--accent); color: var(--text); background: rgba(77,163,255,.06);
+}
+.button-link {
+  display: inline-block; padding: 7px 13px; border-radius: 7px; font-size: 13px;
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
+  text-decoration: none;
+}
+.button-link:hover { border-color: var(--accent); }
+
 ul.list { list-style: none; margin: 0; padding: 0; }
 ul.list li {
   display: flex; align-items: center; gap: 9px; padding: 7px 0;
@@ -158,6 +173,17 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; paddi
             <button class="primary" id="startBtn">Start</button>
             <button class="danger" id="stopBtn" disabled>Stop</button>
           </div>
+        </div>
+        <div id="videoDrop">
+          or <b>drop a video file here</b> to run it
+        </div>
+        <label class="switch" style="margin-top:12px">
+          <input type="checkbox" id="record"> Save the annotated video
+        </label>
+        <div class="row tight" id="results" style="margin-top:12px" hidden>
+          <a class="button-link" id="csvLink" href="/api/appearances.csv">Download CSV</a>
+          <a class="button-link" id="videoLink" href="/api/recording.mp4" hidden>
+            Download video</a>
         </div>
         <div class="hint" id="hint"></div>
       </div>
@@ -241,6 +267,16 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; paddi
 const $ = id => document.getElementById(id);
 let lastEvent = 0, polling = null, running = false;
 
+// A token may arrive in the URL. The server also sets a cookie, but the token
+// is kept here too so the address bar can be cleaned up without losing it.
+const TOKEN = new URLSearchParams(location.search).get('token') || '';
+if (TOKEN) history.replaceState({}, '', location.pathname);
+
+function withToken(path) {
+  if (!TOKEN) return path;
+  return path + (path.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(TOKEN);
+}
+
 function toast(text, bad) {
   const box = $('toast');
   box.textContent = text;
@@ -250,7 +286,9 @@ function toast(text, bad) {
 }
 
 async function api(path, options) {
-  const response = await fetch(path, options);
+  const settings = { ...(options || {}) };
+  if (TOKEN) settings.headers = { ...(settings.headers || {}), 'X-Token': TOKEN };
+  const response = await fetch(path, settings);
   const text = await response.text();
   let data = {};
   try { data = text ? JSON.parse(text) : {}; } catch { data = { detail: text }; }
@@ -336,6 +374,41 @@ $('picker').onchange = event => uploadFiles(event.target.files);
 }));
 drop.addEventListener('drop', event => uploadFiles(event.dataTransfer.files));
 
+// ------------------------------------------------------------- video upload
+async function uploadVideo(fileList) {
+  const file = [...fileList][0];
+  if (!file) return;
+  const zone = $('videoDrop');
+  const original = zone.innerHTML;
+  zone.textContent = `Uploading ${file.name}…`;
+  try {
+    const form = new FormData();
+    form.append('file', file);
+    const data = await api('/api/source', { method: 'POST', body: form });
+    $('source').value = data.path;
+    toast(`${data.name} uploaded — press Start`);
+    $('startBtn').click();
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    zone.innerHTML = original;
+  }
+}
+
+const videoDrop = $('videoDrop');
+const videoPicker = document.createElement('input');
+videoPicker.type = 'file';
+videoPicker.accept = 'video/*';
+videoPicker.onchange = event => uploadVideo(event.target.files);
+videoDrop.onclick = () => videoPicker.click();
+['dragenter', 'dragover'].forEach(name => videoDrop.addEventListener(name, event => {
+  event.preventDefault(); videoDrop.classList.add('over');
+}));
+['dragleave', 'drop'].forEach(name => videoDrop.addEventListener(name, event => {
+  event.preventDefault(); videoDrop.classList.remove('over');
+}));
+videoDrop.addEventListener('drop', event => uploadVideo(event.dataTransfer.files));
+
 $('calibrateBtn').onclick = async () => {
   const button = $('calibrateBtn');
   const label = button.textContent;
@@ -407,10 +480,12 @@ $('startBtn').onclick = async () => {
     await api('/api/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source, settings: currentSettings() }),
+      body: JSON.stringify({
+        source, settings: currentSettings(), record: $('record').checked,
+      }),
     });
     // Cache-bust so a restart does not show the previous stream.
-    $('video').src = '/api/stream.mjpg?t=' + Date.now();
+    $('video').src = withToken('/api/stream.mjpg?t=' + Date.now());
     $('video').style.display = 'block';
     $('placeholder').style.display = 'none';
     lastEvent = 0;
@@ -489,6 +564,12 @@ async function poll() {
       $('video').style.display = 'none';
       $('placeholder').style.display = 'block';
     }
+
+    const finished = !running && state.has_results;
+    $('results').hidden = !finished;
+    $('csvLink').href = withToken('/api/appearances.csv');
+    $('videoLink').hidden = !(finished && state.recording);
+    $('videoLink').href = withToken('/api/recording.mp4');
 
     renderTracks(state.tracks || []);
     renderPeople(state.gallery || []);

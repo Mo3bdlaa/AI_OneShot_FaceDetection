@@ -474,7 +474,35 @@ class Pipeline:
 
     @property
     def appearances(self) -> List[Appearance]:
+        """Appearances that have ended.
+
+        Somebody still on screen is not here yet - their appearance has no end
+        time. Use :meth:`current_appearances` for a report taken mid-run.
+        """
         return list(self._appearances)
+
+    def current_appearances(self) -> List[Appearance]:
+        """Everything seen so far, including the people still on screen.
+
+        Read-only: a report downloaded while a session is running must not
+        change what that session goes on to record.
+        """
+        return list(self._appearances) + list(self._open_tracks.values())
+
+    def reset_results(self) -> None:
+        """Forget what was seen, for a fresh run on the same pipeline.
+
+        The CLI keeps accumulating across the sources of one run, which is what
+        its closing summary should cover. A new job - the web UI starting a
+        different clip - is a different question, and mixing the two would put
+        the last run's people in this run's report.
+        """
+        self._flush_open_tracks()
+        self._appearances.clear()
+        self._embeddings = 0
+        self._skipped_embeddings = 0
+        self._low_quality = 0
+        self._body_holds = 0
 
     def summary(self) -> str:
         """A short 'who was seen, and for how long' report."""
