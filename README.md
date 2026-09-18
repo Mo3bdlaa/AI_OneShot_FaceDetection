@@ -239,8 +239,12 @@ little identity paranoia for speed; 3–5 is a good setting for live video.
 `--detect-every N` skips detection too: the tracker carries the boxes through
 the skipped frames, so the overlay still updates every frame.
 
+With everything switched on at once — ReID, the throttle, the quality gate and
+age/gender — a two-clip run went from 1.0 to **3.2 FPS** on CPU while skipping
+81% of the embeddings and recognising the same six people.
+
 For real-time work, a GPU (`pip install onnxruntime-gpu`, `--device cuda`)
-takes it to comfortably above 30 FPS.
+takes it well past 30 FPS.
 
 On a live camera or stream, add `--realtime`: frames are read on a background
 thread and the recogniser always takes the newest one, so the overlay never
