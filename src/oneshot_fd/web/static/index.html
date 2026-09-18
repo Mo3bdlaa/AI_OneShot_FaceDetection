@@ -53,6 +53,11 @@ main {
   position: relative; background: #000; aspect-ratio: 16/9;
   display: flex; align-items: center; justify-content: center;
 }
+#progress { height: 3px; background: var(--panel-2); overflow: hidden; }
+#progress span {
+  display: block; height: 100%; width: 0; background: var(--accent);
+  transition: width .4s linear;
+}
 #video { width: 100%; height: 100%; object-fit: contain; display: none; }
 #placeholder { color: var(--muted); text-align: center; padding: 30px; font-size: 14px; }
 #placeholder code {
@@ -111,6 +116,11 @@ ul.list li {
   border-bottom: 1px solid var(--line); font-size: 13px;
 }
 ul.list li:last-child { border-bottom: 0; }
+#tracks li.nameable { cursor: pointer; }
+#tracks li.nameable:hover { background: rgba(77,163,255,.07); }
+#tracks li.nameable .name::after {
+  content: " — click to name"; color: var(--accent); font-size: 12px;
+}
 .chip { width: 9px; height: 9px; border-radius: 3px; flex: none; }
 .name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .meta { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -152,6 +162,7 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; paddi
 <main>
   <div class="stack">
     <div class="card">
+      <div id="progress" hidden><span></span></div>
       <div id="viewport">
         <img id="video" alt="Live recognition view">
         <div id="placeholder">
@@ -625,13 +636,36 @@ function renderTracks(tracks) {
       track.by_body ? 'by clothing' : null,
       track.gender ? `${track.gender} ~${track.age}` : null,
     ].filter(Boolean).join(' · ');
-    return `<li>
+    // An unknown face on screen is the easiest possible moment to enrol
+    // somebody: you are already looking at them.
+    const nameable = !track.known && running;
+    return `<li class="${nameable ? 'nameable' : ''}" data-track="${track.id}">
       <span class="chip" style="background:${track.known ? colourFor(track.name) : '#7b8794'}"></span>
       <span class="name">${escapeHtml(track.name)}
         ${extra ? `<span class="meta"> — ${extra}</span>` : ''}</span>
       <span class="meta">${track.score.toFixed(2)}</span>
     </li>`;
   }).join('');
+
+  list.querySelectorAll('li.nameable').forEach(row => {
+    row.onclick = () => nameTrack(row.dataset.track);
+  });
+}
+
+async function nameTrack(trackId) {
+  const name = prompt('Who is this? Their face on screen becomes a reference photo.');
+  if (!name || !name.trim()) return;
+  try {
+    const data = await api('/api/gallery/from-track', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ track_id: Number(trackId), name: name.trim() }),
+    });
+    renderPeople(data.people);
+    toast(`Enrolled ${data.name} from this frame`);
+  } catch (error) {
+    toast(error.message, true);
+  }
 }
 
 function appendEvents(events) {
@@ -677,6 +711,14 @@ async function poll() {
         (state.seen.length ? 'Seen: ' + state.seen.join(', ') : 'Nobody recognised.');
       $('video').style.display = 'none';
       $('placeholder').style.display = 'block';
+    }
+
+    const bar = $('progress');
+    if (running && typeof state.progress === 'number') {
+      bar.hidden = false;
+      bar.firstElementChild.style.width = (state.progress * 100).toFixed(1) + '%';
+    } else {
+      bar.hidden = true;
     }
 
     const finished = !running && state.has_results;

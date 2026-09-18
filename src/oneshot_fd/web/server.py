@@ -273,6 +273,42 @@ def create_app(config: Optional[AppConfig] = None, token: Optional[str] = None):
         result = session.reload_gallery() if saved else {"people": session._gallery_json()}
         return {"saved": saved, "rejected": rejected, **result}
 
+    @app.post("/api/gallery/from-track")
+    def enrol_from_track(payload: Dict[str, Any]):
+        """Enrol whoever is on screen right now, by track id.
+
+        This is the loop the command line cannot close: you see somebody the
+        system does not know, and you name them from the picture you are
+        already looking at, instead of going to find a photo of them.
+        """
+        try:
+            name = _safe_person_name(str(payload.get("name", "")))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        name = Path(name).stem or name
+        if payload.get("track_id") is None:
+            raise HTTPException(status_code=400, detail="Which track? Give a track_id.")
+
+        try:
+            saved = session.enrol_from_track(int(payload["track_id"]), name)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        result = session.reload_gallery()
+        if result.get("problem") or not any(p["name"] == name for p in result["people"]):
+            # A crop with no usable face in it would otherwise sit in the
+            # gallery folder forever, failing every rebuild from now on.
+            saved.unlink(missing_ok=True)
+            session.reload_gallery()
+            raise HTTPException(
+                status_code=422,
+                detail="No usable face in that crop - try again when they are "
+                       "facing the camera more squarely.",
+            )
+        return {"name": name, "saved": saved.name, **result}
+
     @app.delete("/api/gallery/{person}")
     def remove(person: str):
         folder = Path(config.gallery.path)

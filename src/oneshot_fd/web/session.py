@@ -57,8 +57,11 @@ class Session:
         self._lock = threading.Lock()
 
         self._frame: Optional[np.ndarray] = None
+        self._clean: Optional[np.ndarray] = None
         self._jpeg: Optional[bytes] = None
         self._frame_number = 0
+        self._last_tracks: List = []
+        self._progress: Optional[float] = None
 
         self.status = "idle"          # idle | starting | running | stopped | error
         self.message = ""
@@ -95,6 +98,7 @@ class Session:
                 "settings": self._settings_json(),
                 "recording": self.recording_path.name if self.recording_path else None,
                 "pushed": self._pushed,
+                "progress": self._progress,
                 "has_results": bool(self.pipeline and self.pipeline.current_appearances()),
             }
 
@@ -186,14 +190,68 @@ class Session:
         with self._lock:
             return self._jpeg
 
-    def _publish(self, frame: np.ndarray, number: int, fps: float) -> None:
-        ok, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+    def _publish(self, result) -> None:
+        """Make one processed frame the current one for every reader."""
+        ok, buffer = cv2.imencode(".jpg", result.frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
         with self._lock:
-            self._frame = frame
-            self._frame_number = number
-            self.fps = fps
+            self._frame = result.frame
+            self._clean = result.clean
+            self._last_tracks = list(result.tracks)
+            self._frame_number = result.index
+            self.fps = result.fps
             if ok:
                 self._jpeg = buffer.tobytes()
+
+            info = self.pipeline.source_info if self.pipeline else None
+            total = getattr(info, "frame_count", 0) or 0
+            # Live sources have no end, so they have no progress either.
+            self._progress = (
+                min(1.0, result.index / total)
+                if total > 0 and not getattr(info, "is_live", False) else None
+            )
+
+    # ------------------------------------------------- enrolling from the video
+    def enrol_from_track(self, track_id: int, name: str, margin: float = 0.45) -> Path:
+        """Save the face of a track on screen as a new reference photo.
+
+        The crop comes from the clean frame rather than the annotated one, and
+        is padded outwards, because ArcFace wants some room around the face and
+        a label box across the forehead is not a feature of anybody's face.
+        """
+        with self._lock:
+            frame = None if self._clean is None else self._clean.copy()
+            tracks = list(self._last_tracks)
+
+        if frame is None:
+            raise RuntimeError("There is no frame on screen to enrol from.")
+
+        track = next((t for t in tracks if t.track_id == int(track_id)), None)
+        if track is None:
+            raise LookupError(f"Track #{track_id} is no longer on screen.")
+
+        x1, y1, x2, y2 = (int(v) for v in track.box)
+        pad_x = int((x2 - x1) * margin)
+        pad_y = int((y2 - y1) * margin)
+        height, width = frame.shape[:2]
+        crop = frame[max(0, y1 - pad_y):min(height, y2 + pad_y),
+                     max(0, x1 - pad_x):min(width, x2 + pad_x)]
+        if crop.size == 0:
+            raise RuntimeError("That face is outside the frame.")
+
+        folder = Path(self.config.gallery.path)
+        folder.mkdir(parents=True, exist_ok=True)
+        target = folder / f"{name}.jpg"
+        counter = 2
+        while target.exists():
+            target = folder / f"{name}_{counter}.jpg"
+            counter += 1
+
+        ok, buffer = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        if not ok:
+            raise RuntimeError("Could not encode that face.")
+        target.write_bytes(buffer.tobytes())
+        LOGGER.info("Enrolled %s from track #%s into %s", name, track_id, target.name)
+        return target
 
     # ----------------------------------------------------------------- control
     # ------------------------------------------------- frames from a browser
@@ -217,6 +275,8 @@ class Session:
         self._on_screen.clear()
         self._seen_names.clear()
         self._frame_number = 0
+        self._last_tracks = []
+        self._progress = None
         self._pushed = True
         self._stop.clear()
         self.started_at = time.time()
@@ -236,7 +296,7 @@ class Session:
         result = self.ensure_pipeline().process_frame(
             frame, index, time.time() - self.started_at
         )
-        self._publish(result.frame, index, result.fps)
+        self._publish(result)
         self._track_names(result)
         return self.latest_jpeg()
 
@@ -269,6 +329,8 @@ class Session:
         self._on_screen.clear()
         self._seen_names.clear()
         self._frame_number = 0
+        self._last_tracks = []
+        self._progress = None
         self._stop.clear()
         self.started_at = time.time()
         if self.pipeline is not None:
@@ -341,7 +403,7 @@ class Session:
             for result in pipeline.run_source(source):
                 if self._stop.is_set():
                     break
-                self._publish(result.frame, result.index, result.fps)
+                self._publish(result)
                 self._track_names(result)
 
                 if record_to is not None:

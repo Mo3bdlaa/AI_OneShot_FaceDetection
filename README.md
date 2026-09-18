@@ -95,6 +95,16 @@ switches while it runs. It shows who is on screen in the same colours the
 overlay draws, logs everyone as they come and go, and offers the annotated
 video and a CSV of appearances when the run finishes.
 
+### Naming someone from the video itself
+
+When a face comes up `Unknown`, click it in **On screen now** and give it a
+name. That frame's face becomes their reference photo and they are recognised
+from the next frame on — no going off to find a photo of them first.
+
+The crop is taken from the frame before anything was drawn on it, padded
+outwards to give ArcFace some room, and thrown away again with an explanation
+if there turns out to be no usable face in it.
+
 ### Using the camera in your hand
 
 `--source 0` opens a camera attached to *the server*. To use the camera on the
@@ -160,6 +170,7 @@ curl -O localhost:8000/api/appearances.csv          # who was seen, when
 | `POST /api/settings` | change thresholds and overlays while running |
 | `GET`/`POST`/`DELETE /api/gallery` | list, upload and remove reference photos |
 | `GET /api/calibrate` | the threshold the gallery itself suggests |
+| `POST /api/gallery/from-track` | enrol whoever is on screen, by track id |
 | `POST /api/camera/start` | begin a session fed by the client's own camera |
 | `POST /api/camera/frame` | post one JPEG, get the annotated one back |
 | `POST /api/source` | upload a video and get back a path to start on |

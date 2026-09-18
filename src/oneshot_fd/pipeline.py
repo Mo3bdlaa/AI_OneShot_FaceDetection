@@ -33,6 +33,10 @@ class FrameResult:
     timestamp: float = 0.0
     fps: float = 0.0
     detected: bool = False               # did the heavy models run this frame?
+    #: The same frame before anything was drawn on it, in the coordinates the
+    #: track boxes use. Enrolling somebody from what is on screen needs a clean
+    #: crop, not one with a label box across their forehead.
+    clean: Optional[np.ndarray] = None
 
     @property
     def names(self) -> List[str]:
@@ -156,7 +160,8 @@ class Pipeline:
             )
 
         return FrameResult(frame=output, tracks=tracks, index=index,
-                           timestamp=timestamp, fps=fps, detected=should_detect)
+                           timestamp=timestamp, fps=fps, detected=should_detect,
+                           clean=work)
 
     def _detect_and_track(self, frame: np.ndarray, timestamp: float) -> List[Track]:
         """Detect, recognise and track - skipping work the tracker makes needless.
