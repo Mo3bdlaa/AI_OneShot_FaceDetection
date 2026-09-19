@@ -150,6 +150,11 @@ def build_parser() -> argparse.ArgumentParser:
     model_group.add_argument("--realtime", action="store_true",
                              help="on a camera or stream, always grab the newest frame "
                                   "instead of queuing up")
+    model_group.add_argument("--as-sequence", dest="photos_independent",
+                             action="store_false",
+                             help="treat a folder of images as consecutive frames of one "
+                                  "scene, as if extracted from a video. By default each "
+                                  "image is an unrelated photo")
     model_group.add_argument("--no-tracking", dest="tracking", action="store_false",
                              help="label every frame independently (flickers more)")
 
@@ -246,6 +251,7 @@ def config_from_args(args: argparse.Namespace) -> AppConfig:
             max_width=args.max_width,
             realtime=args.realtime,
             max_frames=args.max_frames,
+            photos_are_independent=args.photos_independent,
             mirror=args.mirror,
             quiet=args.quiet,
         ),

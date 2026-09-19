@@ -162,6 +162,12 @@ class RuntimeConfig:
     realtime: bool = False
     #: Stop after this many frames (per source). ``None`` means run to the end.
     max_frames: Optional[int] = None
+    #: Treat a folder of images as unrelated photos rather than as consecutive
+    #: frames of one scene. Carrying a tracker between two photos of different
+    #: people makes the second inherit the first one's name, so this is the
+    #: right default for a photo library; ``--as-sequence`` turns it off for
+    #: frames extracted from a video.
+    photos_are_independent: bool = True
     #: Mirror the frame, which feels natural for a webcam preview.
     mirror: bool = False
     quiet: bool = False

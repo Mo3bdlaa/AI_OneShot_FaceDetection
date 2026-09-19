@@ -55,6 +55,9 @@ class FrameSource:
         self.realtime = realtime
         self._capture: Optional[cv2.VideoCapture] = None
         self._images: List[Path] = []
+        #: For an image folder, the file the current frame came from. A video
+        #: frame has no such name, so this stays None there.
+        self.frame_name: Optional[str] = None
         self._thread: Optional[threading.Thread] = None
         self._latest: Optional[np.ndarray] = None
         self._lock = threading.Lock()
@@ -143,8 +146,10 @@ class FrameSource:
                 frame = imread_unicode(path)
                 if frame is None:
                     continue
+                self.frame_name = path.name
                 yield index, frame, index / fps
                 index += 1
+            self.frame_name = None
             return
 
         assert self._capture is not None

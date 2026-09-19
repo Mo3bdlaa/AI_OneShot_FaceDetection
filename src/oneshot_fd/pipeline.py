@@ -379,11 +379,30 @@ class Pipeline:
                 source.info.kind,
                 f", {source.info.frame_count} frames" if source.info.frame_count > 0 else "",
             )
+            # Unrelated photos must not share a tracker. Two people photographed
+            # in roughly the same place in the frame would otherwise be matched
+            # to one track, and the second would inherit the first one's name.
+            independent = (source.info.kind == "images"
+                           and runtime.photos_are_independent)
+            previous_min_hits = self.tracker.config.min_hits
+            if independent:
+                LOGGER.info("Treating these as unrelated photos "
+                            "(--as-sequence if they are video frames).")
+                # A track normally has to be seen twice before it is shown,
+                # which filters one-frame noise out of video. A photo *is* one
+                # frame, so that rule would hide every face in the folder.
+                self.tracker.config.min_hits = 1
             try:
                 for index, frame, timestamp in source.frames(runtime.max_frames):
+                    if independent:
+                        self._flush_open_tracks()
+                        self.tracker.reset()
+                        self.appearance_bank.clear()
+                        self._current_source = source.frame_name or source.info.name
                     yield self.process_frame(frame, index, timestamp)
             finally:
                 self._flush_open_tracks()
+                self.tracker.config.min_hits = previous_min_hits
 
     def run(self):
         """Yield results for every configured source, one after another."""

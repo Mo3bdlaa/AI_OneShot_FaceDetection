@@ -81,6 +81,23 @@ people look to this model, so the suggested threshold sits just above the
 closest pair. A pair at 0.9+ almost always means the same person is enrolled
 twice under two names — which otherwise shows up as maddening label flicker.
 
+## A folder of photos
+
+Point it at a folder of images and each one is treated as an unrelated photo,
+so the CSV becomes an index of who is in which picture:
+
+```
+group.jpg        Kareem     0.986
+group.jpg        Youssef    0.980
+group.jpg        Nour       0.981
+photo1.jpg       Kareem     1.000
+photo2.jpg       Mona       1.000
+```
+
+Frames extracted from a video are a sequence rather than a set of unrelated
+photos, and `--as-sequence` says so: the tracker then runs across them as it
+would for video.
+
 ## Will it work for *your* people?
 
 Every test in this project uses stand-in models, which leaves one question
@@ -273,6 +290,9 @@ python run.py --source party.mp4 --save outputs/party.mp4
 
 # every video in a folder, plus a log of who appeared when
 python run.py --source clips/ --save outputs/ --log-csv outputs/log.csv
+
+# a folder of photos: who is in which picture
+python run.py --source photos/ --no-display --log-csv outputs/index.csv
 
 # an IP camera / RTSP stream, always showing the present moment
 python run.py --source rtsp://user:pass@192.168.1.10/stream --realtime
@@ -491,6 +511,7 @@ models / speed
       --device           auto | cpu | cuda
       --detect-every N   run the models every N frames and track in between
       --max-width N      downscale frames before processing
+      --as-sequence      treat an image folder as video frames, not as photos
       --realtime         on a camera/stream, always take the newest frame
 
 body / overlay
